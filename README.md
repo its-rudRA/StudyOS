@@ -45,7 +45,7 @@ Additional technologies may be introduced as the project evolves.
 
 Currently in the planning and initial development stage.
 
-🎯 Vision
+🎯 Vision.
 
 To build a beautiful, practical, and intelligent study companion that makes academic planning easier and more organized.
 
