@@ -1,0 +1,212 @@
+/* ==========================================================================
+   StudyOS — Application Shell Layout
+   ========================================================================== */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  min-height: 100vh;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  width: 248px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 14px 16px;
+  background-color: #0D0E14;
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+}
+
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.sidebar-footer {
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Main workspace
+   -------------------------------------------------------------------------- */
+
+.main-workspace {
+  min-width: 0;
+  height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse 80% 180px at 50% -20px, var(--accent-glow), transparent),
+    var(--bg-canvas);
+  background-repeat: no-repeat;
+}
+
+.workspace-inner {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 32px 40px;
+}
+
+.top-command-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px 24px;
+  margin-bottom: 28px;
+}
+
+.header-text {
+  min-width: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Main content grid container (modules will be mounted here) */
+#dashboard-content {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 20px;
+}
+
+#dashboard-content > * {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+/* Row 1: three overview cards, 4 columns each */
+#dashboard-content > .stat-card {
+  grid-column: span 4;
+}
+
+/* Row 2: asymmetric workspace — 8 / 4 */
+#dashboard-content > .panel-tasks {
+  grid-column: span 8;
+  align-self: start;
+}
+
+#dashboard-content > .dashboard-side-stack {
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 959px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+
+  /* Sidebar collapses into a compact top bar */
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow: visible;
+  }
+
+  .sidebar-top {
+    gap: 14px;
+  }
+
+  .sidebar-footer {
+    display: none;
+  }
+
+  .main-workspace {
+    height: auto;
+    overflow-y: visible;
+  }
+
+  .workspace-inner {
+    padding: 24px 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .workspace-inner {
+    padding: 20px 16px;
+  }
+
+  .top-command-header {
+    flex-direction: column;
+    align-items: stretch;
+    margin-bottom: 22px;
+  }
+
+  .header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #dashboard-content {
+    gap: 16px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Responsive: dashboard grid
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  /* Overview strip: two cards on the first line, exam card full-width */
+  #dashboard-content > .stat-card {
+    grid-column: span 6;
+  }
+
+  #dashboard-content > .stat-card--exam {
+    grid-column: 1 / -1;
+  }
+
+  /* Workspace: tasks first, side panels flow below in a responsive grid */
+  #dashboard-content > .panel-tasks {
+    grid-column: 1 / -1;
+  }
+
+  #dashboard-content > .dashboard-side-stack {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    align-items: start;
+  }
+}
+
+@media (max-width: 640px) {
+  #dashboard-content > .stat-card {
+    grid-column: 1 / -1;
+  }
+
+  #dashboard-content > .dashboard-side-stack {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}

@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="StudyOS — Your Personal Academic Command Center">
+  <meta name="theme-color" content="#0A0A0E">
+  <title>StudyOS — Your Personal Academic Command Center</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- ===================== Left Sidebar ===================== -->
+    <aside class="sidebar" aria-label="Primary sidebar">
+      <div class="sidebar-top">
+
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41L13.7 2.71a2.41 2.41 0 0 0-3.41 0z"/>
+            </svg>
+          </span>
+          <span class="brand-title">StudyOS</span>
+          <span class="brand-badge">v0.1</span>
+        </div>
+
+        <nav class="sidebar-nav" aria-label="Main navigation">
+          <a href="#dashboard" class="nav-item active" aria-current="page">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>
+            </svg>
+            <span class="nav-label">Dashboard</span>
+          </a>
+
+          <a href="#subjects" class="nav-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>
+            </svg>
+            <span class="nav-label">Subjects &amp; Courses</span>
+            <span class="nav-counter">4</span>
+          </a>
+
+          <a href="#tasks" class="nav-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>
+            </svg>
+            <span class="nav-label">Tasks</span>
+            <span class="nav-counter">2</span>
+          </a>
+
+          <a href="#calendar" class="nav-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>
+            </svg>
+            <span class="nav-label">Academic Calendar</span>
+            <span class="nav-counter">3</span>
+          </a>
+
+          <a href="#focus" class="nav-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>
+            </svg>
+            <span class="nav-label">Focus Mode</span>
+          </a>
+
+          <a href="#analytics" class="nav-item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/>
+            </svg>
+            <span class="nav-label">Analytics</span>
+          </a>
+        </nav>
+
+        <section class="sidebar-section" aria-labelledby="pinned-subjects-title">
+          <div class="sidebar-section-header">
+            <h2 class="section-title" id="pinned-subjects-title">Pinned Subjects</h2>
+            <button type="button" class="icon-btn" aria-label="Pin a subject" title="Pin a subject">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h14"/><path d="M12 5v14"/>
+              </svg>
+            </button>
+          </div>
+
+          <ul class="subject-list">
+            <li>
+              <a href="#subject-cs-301" class="subject-item subject-item--blue">
+                <span class="subject-dot" aria-hidden="true"></span>
+                <span class="subject-code">CS-301</span>
+                <span class="subject-name">Algorithms</span>
+              </a>
+            </li>
+            <li>
+              <a href="#subject-math-204" class="subject-item subject-item--green">
+                <span class="subject-dot" aria-hidden="true"></span>
+                <span class="subject-code">MATH-204</span>
+                <span class="subject-name">Linear Algebra</span>
+              </a>
+            </li>
+            <li>
+              <a href="#subject-phys-102" class="subject-item subject-item--amber">
+                <span class="subject-dot" aria-hidden="true"></span>
+                <span class="subject-code">PHYS-102</span>
+                <span class="subject-name">Electromagnetism</span>
+              </a>
+            </li>
+            <li>
+              <a href="#subject-hum-110" class="subject-item subject-item--pink">
+                <span class="subject-dot" aria-hidden="true"></span>
+                <span class="subject-code">HUM-110</span>
+                <span class="subject-name">Ethics</span>
+              </a>
+            </li>
+          </ul>
+        </section>
+
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-pill" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Local-First • IndexedDB Synced</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===================== Main Workspace ===================== -->
+    <div class="main-workspace">
+      <div class="workspace-inner">
+
+        <header class="top-command-header">
+          <div class="header-text">
+            <h1 id="greeting-title">Good evening, Rudra</h1>
+            <p id="current-date-display" class="subtitle-mono">Thursday, Oct 15 • Week 7 of Semester</p>
+          </div>
+
+          <div class="header-actions">
+            <button type="button" class="btn-secondary" id="new-task-btn">
+              <span>+ New Task</span>
+              <kbd>⌘N</kbd>
+            </button>
+            <button type="button" class="btn-primary" id="start-focus-btn">
+              <span class="btn-glyph" aria-hidden="true">▶</span>
+              <span>Start Focus Session</span>
+            </button>
+          </div>
+        </header>
+
+        <main id="dashboard-content">
+
+          <!-- ============ ROW 1: Daily Overview & Progress Strip ============ -->
+
+          <!-- Card 1: Daily Completion -->
+          <section class="card stat-card" aria-labelledby="stat-completion-title">
+            <header class="card-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
+              </svg>
+              <h2 id="stat-completion-title">Daily Completion</h2>
+            </header>
+            <p class="metric-line">
+              <span id="metric-tasks-done" class="metric-big">4</span> of <span id="metric-tasks-total" class="metric-big">6</span> Tasks Completed
+            </p>
+            <div class="progress-row">
+              <div class="progress-track" role="progressbar" aria-label="Daily task completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="67">
+                <div id="metric-tasks-bar" class="progress-fill" style="width: 67%"></div>
+              </div>
+              <span id="metric-tasks-pct" class="progress-label">67%</span>
+            </div>
+          </section>
+
+          <!-- Card 2: Today's Focus Time -->
+          <section class="card stat-card" aria-labelledby="stat-focus-title">
+            <header class="card-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <h2 id="stat-focus-title">Today's Focus Time</h2>
+            </header>
+            <p class="metric-line">
+              <span id="metric-focus-logged" class="metric-big">2h 15m</span> Logged
+            </p>
+            <div class="progress-row">
+              <div class="progress-track" role="progressbar" aria-label="Daily focus time goal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="56">
+                <div id="metric-focus-bar" class="progress-fill" style="width: 56%"></div>
+              </div>
+              <span id="metric-focus-goal" class="progress-label">4h 00m Goal</span>
+            </div>
+          </section>
+
+          <!-- Card 3: Next Exam Countdown -->
+          <section class="card stat-card stat-card--exam" aria-labelledby="stat-exam-title">
+            <header class="card-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>
+              </svg>
+              <h2 id="stat-exam-title">Next Exam</h2>
+            </header>
+            <div class="exam-top">
+              <p class="exam-name"><span class="course-tag course-tag--blue">CS-301</span> Midterm</p>
+              <span class="priority-badge priority-badge--high">High Priority</span>
+            </div>
+            <p class="metric-line">in <span id="metric-exam-days" class="metric-big">4</span> Days</p>
+            <p class="card-meta">Mon, Oct 19 • 10:00 AM • Hall B</p>
+          </section>
+
+          <!-- ============ ROW 2: Asymmetric Workspace Grid ============ -->
+
+          <!-- Left column: Smart Schedule & Tasks -->
+          <section class="panel panel-tasks" aria-labelledby="tasks-panel-title">
+            <header class="panel-header">
+              <h2 class="panel-title" id="tasks-panel-title">Today's Smart Schedule &amp; Tasks</h2>
+              <div class="segmented" role="group" aria-label="Filter tasks">
+                <button type="button" class="segmented-btn active" data-filter="all" aria-pressed="true">All <span class="count">6</span></button>
+                <button type="button" class="segmented-btn" data-filter="pending" aria-pressed="false">Pending <span class="count">2</span></button>
+                <button type="button" class="segmented-btn" data-filter="completed" aria-pressed="false">Completed <span class="count">4</span></button>
+              </div>
+            </header>
+
+            <form id="quick-task-form" class="quick-add" autocomplete="off">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h14"/><path d="M12 5v14"/>
+              </svg>
+              <input type="text" id="quick-task-input" class="quick-add-input" placeholder="Add a task for today... press Enter" aria-label="Add a task for today">
+              <button type="submit" class="quick-add-submit" aria-label="Add task"><kbd>↵ Enter</kbd></button>
+            </form>
+
+            <div id="dashboard-task-list" class="task-list">
+
+              <article class="task-item" data-status="pending">
+                <input type="checkbox" class="task-check" id="task-1-check" aria-labelledby="task-1-title">
+                <div class="task-body">
+                  <h3 class="task-title" id="task-1-title">Finish dynamic programming problem set (Q4–Q7)</h3>
+                  <div class="task-meta">
+                    <span class="course-tag course-tag--blue">CS-301</span>
+                    <span class="task-meta-item">1h 30m</span>
+                    <span class="task-meta-item">Due 11:59 PM</span>
+                  </div>
+                </div>
+                <div class="task-actions">
+                  <button type="button" class="btn-task-focus btn-task-focus--pinned">Focus ▶</button>
+                  <span class="priority-badge priority-badge--high">High</span>
+                </div>
+              </article>
+
+              <article class="task-item" data-status="pending">
+                <input type="checkbox" class="task-check" id="task-2-check" aria-labelledby="task-2-title">
+                <div class="task-body">
+                  <h3 class="task-title" id="task-2-title">Review eigenvalue decomposition lecture notes</h3>
+                  <div class="task-meta">
+                    <span class="course-tag course-tag--green">MATH-204</span>
+                    <span class="task-meta-item">45m</span>
+                    <span class="task-meta-item">Due 6:00 PM</span>
+                  </div>
+                </div>
+                <div class="task-actions">
+                  <button type="button" class="btn-task-focus">Focus ▶</button>
+                  <span class="priority-badge priority-badge--med">Medium</span>
+                </div>
+              </article>
+
+              <article class="task-item" data-status="completed">
+                <input type="checkbox" class="task-check" id="task-3-check" aria-labelledby="task-3-title" checked>
+                <div class="task-body">
+                  <h3 class="task-title" id="task-3-title">Draft lab report: Faraday's law induction</h3>
+                  <div class="task-meta">
+                    <span class="course-tag course-tag--amber">PHYS-102</span>
+                    <span class="task-meta-item">1h 00m</span>
+                    <span class="task-meta-item">Due Fri 9:00 AM</span>
+                  </div>
+                </div>
+                <div class="task-actions">
+                  <span class="priority-badge priority-badge--high">High</span>
+                </div>
+              </article>
+
+              <article class="task-item" data-status="completed">
+                <input type="checkbox" class="task-check" id="task-4-check" aria-labelledby="task-4-title" checked>
+                <div class="task-body">
+                  <h3 class="task-title" id="task-4-title">Read Kant's Groundwork, Section II</h3>
+                  <div class="task-meta">
+                    <span class="course-tag course-tag--pink">HUM-110</span>
+                    <span class="task-meta-item">40m</span>
+                    <span class="task-meta-item">Due 10:00 PM</span>
+                  </div>
+                </div>
+                <div class="task-actions">
+                  <span class="priority-badge priority-badge--low">Low</span>
+                </div>
+              </article>
+
+              <article class="task-item" data-status="completed">
+                <input type="checkbox" class="task-check" id="task-5-check" aria-labelledby="task-5-title" checked>
+                <div class="task-body">
+                  <h3 class="task-title" id="task-5-title">Implement Dijkstra with binary heap for practice</h3>
+                  <div class="task-meta">
+                    <span class="course-tag course-tag--blue">CS-301</span>
+                    <span class="task-meta-item">50m</span>
+                    <span class="task-meta-item">Due 8:00 PM</span>
+                  </div>
+                </div>
+                <div class="task-actions">
+                  <span class="priority-badge priority-badge--med">Medium</span>
+                </div>
+              </article>
+
+            </div>
+          </section>
+
+          <!-- Right column: side stack -->
+          <aside class="dashboard-side-stack" aria-label="Schedule, deadlines and activity">
+
+            <!-- Panel A: Today's Planned Blocks -->
+            <section class="panel" aria-labelledby="blocks-panel-title">
+              <header class="panel-header">
+                <h2 class="panel-title" id="blocks-panel-title">Today's Planned Blocks</h2>
+                <button type="button" class="btn-ghost" id="btn-auto-plan">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
+                  </svg>
+                  Auto-Plan Day
+                </button>
+              </header>
+              <div class="panel-body">
+                <ol id="planned-blocks-list" class="timeline">
+                  <li class="block block--past">
+                    <div class="block-top">
+                      <span class="block-time">09:00 - 10:30</span>
+                      <svg class="block-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-label="Completed" role="img">
+                        <path d="M20 6 9 17l-5-5"/>
+                      </svg>
+                    </div>
+                    <p class="block-title">Algorithm Problem Set</p>
+                    <p class="block-course tone-blue"><span class="subject-dot" aria-hidden="true"></span>CS-301 Algorithms</p>
+                  </li>
+
+                  <li class="block block--past">
+                    <div class="block-top">
+                      <span class="block-time">14:00 - 15:00</span>
+                      <svg class="block-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-label="Completed" role="img">
+                        <path d="M20 6 9 17l-5-5"/>
+                      </svg>
+                    </div>
+                    <p class="block-title">Linear Algebra Review</p>
+                    <p class="block-course tone-green"><span class="subject-dot" aria-hidden="true"></span>MATH-204 Linear Algebra</p>
+                  </li>
+
+                  <li class="block block--active" aria-current="true">
+                    <div class="block-top">
+                      <span class="block-time">19:30 - 21:00</span>
+                      <span class="badge-up-next">Up next</span>
+                    </div>
+                    <p class="block-title">DP Deep Work — Q4 to Q7</p>
+                    <p class="block-course tone-blue"><span class="subject-dot" aria-hidden="true"></span>CS-301 Algorithms</p>
+                  </li>
+                </ol>
+              </div>
+            </section>
+
+            <!-- Panel B: Upcoming Deadlines & Exams -->
+            <section class="panel" aria-labelledby="deadlines-panel-title">
+              <header class="panel-header">
+                <h2 class="panel-title" id="deadlines-panel-title">Upcoming Deadlines &amp; Exams</h2>
+                <span class="panel-label">Next 14d</span>
+              </header>
+              <div class="panel-body">
+                <ul class="deadline-list">
+                  <li class="deadline-item">
+                    <time class="date-tile date-tile--urgent" datetime="2026-10-19">
+                      <span class="date-tile-month">Oct</span>
+                      <span class="date-tile-day">19</span>
+                    </time>
+                    <div class="deadline-info">
+                      <p class="deadline-title">CS-301 Midterm Exam</p>
+                      <p class="deadline-meta tone-blue"><span class="subject-dot" aria-hidden="true"></span>CS-301 • Exam</p>
+                    </div>
+                    <span class="deadline-countdown deadline-countdown--urgent">4d</span>
+                  </li>
+
+                  <li class="deadline-item">
+                    <time class="date-tile" datetime="2026-10-22">
+                      <span class="date-tile-month">Oct</span>
+                      <span class="date-tile-day">22</span>
+                    </time>
+                    <div class="deadline-info">
+                      <p class="deadline-title">Problem Set 5: Vector Spaces</p>
+                      <p class="deadline-meta tone-green"><span class="subject-dot" aria-hidden="true"></span>MATH-204 • Assignment</p>
+                    </div>
+                    <span class="deadline-countdown">7d</span>
+                  </li>
+
+                  <li class="deadline-item">
+                    <time class="date-tile" datetime="2026-10-26">
+                      <span class="date-tile-month">Oct</span>
+                      <span class="date-tile-day">26</span>
+                    </time>
+                    <div class="deadline-info">
+                      <p class="deadline-title">Faraday's Law Lab Submission</p>
+                      <p class="deadline-meta tone-amber"><span class="subject-dot" aria-hidden="true"></span>PHYS-102 • Lab</p>
+                    </div>
+                    <span class="deadline-countdown">11d</span>
+                  </li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- Panel C: Weekly Activity Summary -->
+            <section class="panel" aria-labelledby="weekly-panel-title">
+              <header class="panel-header">
+                <h2 class="panel-title" id="weekly-panel-title">Weekly Activity</h2>
+                <span class="panel-label">14.5h this wk</span>
+              </header>
+              <div class="panel-body">
+                <ul class="week-chart">
+                  <li class="week-col">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 100%"></span></div>
+                    <span class="week-day">Mon</span><span class="visually-hidden">3.5 hours</span>
+                  </li>
+                  <li class="week-col">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 71%"></span></div>
+                    <span class="week-day">Tue</span><span class="visually-hidden">2.5 hours</span>
+                  </li>
+                  <li class="week-col">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 86%"></span></div>
+                    <span class="week-day">Wed</span><span class="visually-hidden">3 hours</span>
+                  </li>
+                  <li class="week-col week-col--today" aria-current="date">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 64%"></span></div>
+                    <span class="week-day">Thu</span><span class="visually-hidden">2.25 hours, today</span>
+                  </li>
+                  <li class="week-col week-col--future">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 43%"></span></div>
+                    <span class="week-day">Fri</span><span class="visually-hidden">1.5 hours planned</span>
+                  </li>
+                  <li class="week-col week-col--future">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 29%"></span></div>
+                    <span class="week-day">Sat</span><span class="visually-hidden">1 hour planned</span>
+                  </li>
+                  <li class="week-col week-col--future">
+                    <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 21%"></span></div>
+                    <span class="week-day">Sun</span><span class="visually-hidden">0.75 hours planned</span>
+                  </li>
+                </ul>
+              </div>
+            </section>
+
+          </aside>
+
+        </main>
+
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
