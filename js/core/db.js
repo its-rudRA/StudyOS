@@ -431,16 +431,34 @@ export async function getAllSessions() {
   return getAll(STORES.SESSIONS);
 }
 
-export async function addSession(session) {
+export async function addSession(session = {}) {
   const now = new Date();
+  const isoNow = now.toISOString();
+  const durationMinutes = Math.max(1, Math.round(Number(session.durationMinutes) || 25));
+  const timestamp = session.timestamp ?? session.startedAt ?? isoNow;
+  const startedAt = session.startedAt ?? timestamp;
+  const title = String(session.title ?? '').trim();
+
   return putOne(STORES.SESSIONS, {
     type: 'focus',
-    taskId: null,
-    startedAt: now.toISOString(),
     ...session,
     id: session.id ?? generateId('session'),
+    subjectId: session.subjectId || null,
+    taskId: session.taskId || null,
+    durationMinutes,
     date: session.date ?? toDateKey(now),
+    timestamp,
+    startedAt,
+    title: title || 'Focus Session',
   });
+}
+
+export async function deleteSession(id) {
+  const db = await initDB();
+  const tx = db.transaction(STORES.SESSIONS, 'readwrite');
+  tx.objectStore(STORES.SESSIONS).delete(id);
+  await transactionDone(tx);
+  return true;
 }
 
 /* ==========================================================================

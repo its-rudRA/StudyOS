@@ -20,6 +20,8 @@ import {
   toggleTaskCompletion,
   deleteTask,
   getAllSessions,
+  addSession,
+  deleteSession,
   getScheduleBlocks,
   saveScheduleBlocks,
   toDateKey,
@@ -27,6 +29,12 @@ import {
   formatDueLabelFromDate,
 } from './core/db.js';
 import { generateSmartSchedule } from './modules/scheduler.js';
+import {
+  FOCUS_MODES,
+  clampFocusMinutes,
+  playCompletionChime,
+  createFocusTimer,
+} from './modules/focus.js';
 
 /* ==========================================================================
    Configuration
@@ -65,7 +73,7 @@ const ICON_EDIT =
    ========================================================================== */
 
 const state = {
-  view: 'dashboard', // 'dashboard' | 'subjects' | 'tasks'
+  view: 'dashboard', // 'dashboard' | 'subjects' | 'tasks' | 'focus'
   subjects: [],
   tasks: [],
   sessions: [],
@@ -77,6 +85,14 @@ const state = {
     subjectId: 'all',
     status: 'all', // 'all' | 'pending' | 'completed'
     sort: 'smart', // 'smart' | 'deadline' | 'duration-desc' | 'duration-asc'
+  },
+  focus: {
+    mode: 'pomodoro', // 'pomodoro' | 'deep' | 'sprint' | 'break' | 'custom'
+    durationMinutes: 25,
+    taskId: null,
+    subjectId: null,
+    muted: false,
+    zenMode: false,
   },
 };
 
@@ -230,11 +246,22 @@ function renderMetrics() {
     .filter((session) => session.date === todayKey)
     .reduce((sum, session) => sum + (Number(session.durationMinutes) || 0), 0);
   const focusPct = Math.min(100, Math.round((focusMinutes / CONFIG.dailyFocusGoalMinutes) * 100));
+  const formattedFocus = formatDuration(focusMinutes);
 
-  refs.focusLogged.textContent = formatDuration(focusMinutes);
-  refs.focusBar.style.width = `${focusPct}%`;
-  refs.focusBar.parentElement.setAttribute('aria-valuenow', String(focusPct));
-  refs.focusGoal.textContent = `${formatDuration(CONFIG.dailyFocusGoalMinutes)} Goal`;
+  if (refs.focusLogged) refs.focusLogged.textContent = formattedFocus;
+  const altFocusTimeEl = document.getElementById('metric-focus-time');
+  if (altFocusTimeEl) altFocusTimeEl.textContent = formattedFocus;
+
+  if (refs.focusBar) {
+    refs.focusBar.style.width = `${focusPct}%`;
+    refs.focusBar.parentElement?.setAttribute('aria-valuenow', String(focusPct));
+  }
+  if (refs.focusGoal) {
+    refs.focusGoal.textContent = `${formatDuration(CONFIG.dailyFocusGoalMinutes)} Goal`;
+  }
+  if (refs.focusTodayTotalPill) {
+    refs.focusTodayTotalPill.textContent = `${formattedFocus} logged today`;
+  }
 }
 
 /** Tasks narrowed by the sidebar subject filter only (what the filter tabs count). */
@@ -295,12 +322,15 @@ function renderSubjects() {
 }
 
 function renderSubjectSelection() {
-  const activeSubjectId =
-    state.view === 'tasks'
-      ? state.tasksFilter.subjectId !== 'all' && state.tasksFilter.subjectId !== 'none'
+  let activeSubjectId = state.subjectId;
+  if (state.view === 'tasks') {
+    activeSubjectId =
+      state.tasksFilter.subjectId !== 'all' && state.tasksFilter.subjectId !== 'none'
         ? state.tasksFilter.subjectId
-        : null
-      : state.subjectId;
+        : null;
+  } else if (state.view === 'focus') {
+    activeSubjectId = state.focus.subjectId;
+  }
 
   refs.subjectList.querySelectorAll('.subject-item').forEach((button) => {
     const selected = button.dataset.subjectId === activeSubjectId;
@@ -318,6 +348,19 @@ function setSubjectFilter(subjectId) {
     return;
   }
 
+  if (state.view === 'focus') {
+    state.focus.subjectId = subjectId;
+    if (state.focus.taskId) {
+      const boundTask = state.tasks.find((t) => t.id === state.focus.taskId);
+      if (boundTask && boundTask.subjectId !== subjectId) {
+        state.focus.taskId = null;
+      }
+    }
+    renderSubjectSelection();
+    renderFocusView();
+    return;
+  }
+
   if (state.view !== 'dashboard') {
     state.subjectId = subjectId;
     switchView('dashboard');
@@ -330,27 +373,69 @@ function setSubjectFilter(subjectId) {
 }
 
 /* ==========================================================================
-   SPA View Navigation & Module 2: Subjects & Courses View
+   SPA View Navigation & Priority View-Stacking Isolation
    ========================================================================== */
+
+const VIEW_SECTION_MAP = Object.freeze({
+  dashboard: 'dashboard-content',
+  subjects: 'subjects-view',
+  tasks: 'tasks-view',
+  focus: 'focus-view',
+});
+
+const WORKSPACE_SECTION_IDS = Object.freeze([
+  'dashboard-content',
+  'subjects-view',
+  'tasks-view',
+  'focus-view',
+  'calendar-view',
+  'analytics-view',
+]);
 
 const UPCOMING_VIEW_LABELS = Object.freeze({
   calendar: 'Academic Calendar',
-  focus: 'Focus Mode',
   analytics: 'Analytics',
 });
 
-function switchView(viewName) {
-  if (viewName !== 'dashboard' && viewName !== 'subjects' && viewName !== 'tasks') {
+function enforceActiveViewDOM(activeSectionId) {
+  for (const id of WORKSPACE_SECTION_IDS) {
+    const section = document.getElementById(id);
+    if (!section) continue;
+    const isActive = section.id === activeSectionId;
+    section.hidden = !isActive;
+    section.style.display = isActive ? '' : 'none';
+  }
+}
+
+function scrollWorkspaceToTop() {
+  const workspaceContainer = document.querySelector('.workspace, .main-workspace');
+  if (workspaceContainer) workspaceContainer.scrollTop = 0;
+  if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
+}
+
+function switchView(viewName, { updateHash = true } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(VIEW_SECTION_MAP, viewName)) {
     const label = UPCOMING_VIEW_LABELS[viewName] ?? 'That module';
     showToast(`${label} is coming in a later phase.`);
+    enforceActiveViewDOM(VIEW_SECTION_MAP[state.view] ?? 'dashboard-content');
     return;
   }
 
-  state.view = viewName;
+  if (viewName !== 'focus' && state.focus.zenMode) {
+    setZenMode(false);
+  }
 
-  if (refs.dashboardView) refs.dashboardView.hidden = viewName !== 'dashboard';
-  if (refs.subjectsView) refs.subjectsView.hidden = viewName !== 'subjects';
-  if (refs.tasksView) refs.tasksView.hidden = viewName !== 'tasks';
+  state.view = viewName;
+  const activeSectionId = VIEW_SECTION_MAP[viewName];
+  enforceActiveViewDOM(activeSectionId);
+
+  if (updateHash && window.location.hash !== `#${viewName}`) {
+    try {
+      window.history.replaceState(null, '', `#${viewName}`);
+    } catch {
+      // Ignore history API restrictions in sandboxed environments
+    }
+  }
 
   refs.navItems.forEach((link) => {
     const isActive = link.dataset.view === viewName;
@@ -362,6 +447,7 @@ function switchView(viewName) {
     }
   });
 
+  scrollWorkspaceToTop();
   renderSubjectSelection();
 
   if (viewName === 'subjects') {
@@ -369,7 +455,30 @@ function switchView(viewName) {
   } else if (viewName === 'tasks') {
     populateSubjectSelects();
     renderTasksView();
+  } else if (viewName === 'focus') {
+    renderFocusView();
   }
+}
+
+function resolveRouteFromHash(rawHash = window.location.hash) {
+  const clean = String(rawHash || '').replace(/^#/, '').trim().toLowerCase();
+  if (clean === 'focus' || clean === 'focus-view') return { view: 'focus', subjectId: null };
+  if (clean === 'subjects' || clean === 'subjects-view') return { view: 'subjects', subjectId: null };
+  if (clean === 'tasks' || clean === 'tasks-view') return { view: 'tasks', subjectId: null };
+  if (clean.startsWith('subject-')) {
+    const subjectSlug = clean.slice('subject-'.length);
+    const matchedSubjectId = resolveSubjectId(subjectSlug);
+    return { view: 'subjects', subjectId: matchedSubjectId };
+  }
+  return { view: 'dashboard', subjectId: null };
+}
+
+function applyHashRoute({ updateHash = false } = {}) {
+  const route = resolveRouteFromHash(window.location.hash);
+  if (route.subjectId) {
+    state.subjectId = route.subjectId;
+  }
+  switchView(route.view, { updateHash });
 }
 
 function getSubjectFocusMinutes(subjectId) {
@@ -624,6 +733,7 @@ async function handleSubjectFormSubmit(event) {
     renderSubjectsView();
     renderTaskList();
     renderTasksView();
+    renderFocusView();
     renderMetrics();
     closeSubjectModal();
 
@@ -666,6 +776,9 @@ async function handleDeleteSubject(subjectId) {
     if (state.tasksFilter.subjectId === subject.id) {
       state.tasksFilter.subjectId = 'all';
     }
+    if (state.focus.subjectId === subject.id) {
+      state.focus.subjectId = defaultSubjectId();
+    }
 
     // Update any schedule blocks that belonged to this subject's tasks
     if (state.blocks.length > 0) {
@@ -684,6 +797,7 @@ async function handleDeleteSubject(subjectId) {
     renderFilters();
     renderTaskList();
     renderTasksView();
+    renderFocusView();
     renderMetrics();
 
     showToast(`Deleted "${subject.code} — ${subject.name}"`);
@@ -1194,6 +1308,7 @@ async function handleTaskFormSubmit(event) {
       renderTaskList({ highlightId: saved.id });
       renderTasksView({ highlightId: saved.id });
       renderSubjectsView();
+      renderFocusView();
       renderMetrics();
       closeTaskModal();
 
@@ -1371,6 +1486,7 @@ async function toggleTask(id, checkbox = null) {
   renderMetrics();
   renderCounts();
   renderSubjectsView();
+  renderFocusView();
 
   // Let the fade/strikethrough finish, then refresh lists where filtering or sorting changes.
   clearTimeout(listRefreshTimer);
@@ -1415,6 +1531,7 @@ async function removeTask(id) {
   renderMetrics();
   renderCounts();
   renderSubjectsView();
+  renderFocusView();
   await syncBlocks();
 
   showToast(`Deleted "${task.title}"`, {
@@ -1430,6 +1547,7 @@ async function removeTask(id) {
         renderMetrics();
         renderCounts();
         renderSubjectsView();
+        renderFocusView();
         await commitBlocks(reconcileBlocks(restoredBlocks, state.tasks));
       } catch (error) {
         console.warn('StudyOS: could not restore task.', error);
@@ -1471,6 +1589,7 @@ async function createTask(fields, { announce = true } = {}) {
   renderTasksView({ highlightId: saved.id });
   renderMetrics();
   renderSubjectsView();
+  renderFocusView();
   await syncBlocks();
 
   if (announce) {
@@ -1565,8 +1684,470 @@ async function handleQuickAdd(event) {
 }
 
 /* ==========================================================================
-   Focus (placeholder until Focus Mode exists)
+   Module 5: Focus Mode (#focus-view), Timer Engine & Live Session Logging
    ========================================================================== */
+
+const FOCUS_RING_CIRCUMFERENCE = 2 * Math.PI * 120; // r = 120 in #focus-ring-progress
+
+const focusTimer = createFocusTimer({
+  onTick(snapshot) {
+    renderFocusTimerSnapshot(snapshot);
+  },
+  onComplete(completed) {
+    handleFocusTimerComplete(completed);
+  },
+});
+
+function matchPresetModeByMinutes(minutes) {
+  const num = Number(minutes);
+  if (num === 25) return 'pomodoro';
+  if (num === 50) return 'deep';
+  if (num === 15) return 'sprint';
+  if (num === 5) return 'break';
+  return 'custom';
+}
+
+function setZenMode(enabled) {
+  state.focus.zenMode = Boolean(enabled);
+  document.body.classList.toggle('is-zen-mode', state.focus.zenMode);
+  if (refs.focusZenBtn) {
+    refs.focusZenBtn.setAttribute('aria-pressed', String(state.focus.zenMode));
+  }
+  if (refs.focusZenLabel) {
+    refs.focusZenLabel.textContent = state.focus.zenMode ? 'Exit Zen (Esc)' : 'Zen Mode';
+  }
+}
+
+function setFocusMuted(muted) {
+  state.focus.muted = Boolean(muted);
+  try {
+    localStorage.setItem('studyos_focus_muted', state.focus.muted ? '1' : '0');
+  } catch {
+    // Ignore localStorage restrictions
+  }
+  if (refs.focusMuteBtn) {
+    refs.focusMuteBtn.setAttribute('aria-pressed', String(state.focus.muted));
+  }
+  if (refs.focusMuteLabel) {
+    refs.focusMuteLabel.textContent = state.focus.muted ? 'Muted' : 'Chime On';
+  }
+}
+
+function selectFocusMode(modeId, customMinutes = null) {
+  const modeMeta = FOCUS_MODES[modeId] ?? FOCUS_MODES.custom;
+  const minutes = clampFocusMinutes(
+    customMinutes ?? modeMeta.defaultMinutes,
+    modeMeta.defaultMinutes,
+  );
+
+  state.focus.mode = FOCUS_MODES[modeId] ? modeId : 'custom';
+  state.focus.durationMinutes = minutes;
+
+  if (refs.focusCustomMinutes && state.focus.mode === 'custom') {
+    refs.focusCustomMinutes.value = String(minutes);
+  }
+
+  if (refs.focusModePills) {
+    refs.focusModePills.querySelectorAll('.focus-mode-pill').forEach((btn) => {
+      const active = btn.dataset.focusMode === state.focus.mode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  focusTimer.setModeAndDuration(state.focus.mode, minutes);
+}
+
+function populateFocusSelects() {
+  if (!state.focus.subjectId && state.subjects.length > 0) {
+    state.focus.subjectId = defaultSubjectId();
+  }
+
+  // Validate that any bound task still exists and is pending
+  if (state.focus.taskId) {
+    const task = state.tasks.find((item) => item.id === state.focus.taskId);
+    if (!task || task.completed) {
+      state.focus.taskId = null;
+    } else if (task.subjectId) {
+      state.focus.subjectId = task.subjectId;
+    }
+  }
+
+  if (refs.focusTaskSelect) {
+    const defaultOpt = createEl('option', '', 'No specific task (Direct Subject Focus)');
+    defaultOpt.value = '';
+    const taskOptions = [defaultOpt];
+
+    const pendingTasks = state.tasks
+      .filter((task) => !task.completed)
+      .sort(compareTasksForView);
+
+    for (const task of pendingTasks) {
+      const subject = getSubject(task.subjectId);
+      const code = subject ? subject.code : 'GEN';
+      const opt = createEl(
+        'option',
+        '',
+        `[${code}] ${task.title} (${formatDuration(task.durationMinutes)})`,
+      );
+      opt.value = task.id;
+      taskOptions.push(opt);
+    }
+
+    refs.focusTaskSelect.replaceChildren(...taskOptions);
+    refs.focusTaskSelect.value = state.focus.taskId ?? '';
+  }
+
+  const buildSubjectOptions = () => {
+    const opts = [];
+    for (const subject of state.subjects) {
+      const opt = createEl('option', '', `${subject.code} — ${subject.name}`);
+      opt.value = subject.id;
+      opts.push(opt);
+    }
+    const genOpt = createEl('option', '', 'General (GEN)');
+    genOpt.value = '';
+    opts.push(genOpt);
+    return opts;
+  };
+
+  if (refs.focusSubjectSelect) {
+    const opts = buildSubjectOptions();
+    refs.focusSubjectSelect.replaceChildren(...opts);
+    const validSubj = state.focus.subjectId && state.subjects.some((s) => s.id === state.focus.subjectId);
+    state.focus.subjectId = validSubj ? state.focus.subjectId : '';
+    refs.focusSubjectSelect.value = state.focus.subjectId;
+  }
+
+  if (refs.focusManualSubject) {
+    const prevManual = refs.focusManualSubject.value;
+    const opts = buildSubjectOptions();
+    refs.focusManualSubject.replaceChildren(...opts);
+    if (prevManual && opts.some((o) => o.value === prevManual)) {
+      refs.focusManualSubject.value = prevManual;
+    } else {
+      refs.focusManualSubject.value = state.focus.subjectId || defaultSubjectId() || '';
+    }
+  }
+
+  if (refs.focusMarkTaskDoneBtn) {
+    const boundTask = state.focus.taskId
+      ? state.tasks.find((item) => item.id === state.focus.taskId && !item.completed)
+      : null;
+    refs.focusMarkTaskDoneBtn.hidden = !boundTask;
+  }
+}
+
+function renderFocusBoundContext() {
+  const boundTask = state.focus.taskId
+    ? state.tasks.find((item) => item.id === state.focus.taskId)
+    : null;
+  const effectiveSubjectId = boundTask?.subjectId ?? state.focus.subjectId;
+  const subject = getSubject(effectiveSubjectId);
+
+  if (refs.focusBoundTag) {
+    refs.focusBoundTag.className = `course-tag${subject ? ` course-tag--${subject.tone}` : ''}`;
+    refs.focusBoundTag.textContent = subject ? subject.code : 'GEN';
+  }
+
+  if (refs.focusBoundTitle) {
+    if (boundTask) {
+      refs.focusBoundTitle.textContent = boundTask.title;
+    } else if (subject) {
+      refs.focusBoundTitle.textContent = `${subject.name} Focus`;
+    } else {
+      refs.focusBoundTitle.textContent = 'General Focus Session';
+    }
+  }
+}
+
+function renderFocusTimerSnapshot(snapshot = focusTimer.getSnapshot()) {
+  if (refs.focusTimerDisplay) {
+    refs.focusTimerDisplay.textContent = snapshot.formattedRemaining;
+  }
+  if (refs.focusElapsedDisplay) {
+    refs.focusElapsedDisplay.textContent = snapshot.formattedElapsed;
+  }
+  if (refs.focusStatusPill) {
+    refs.focusStatusPill.textContent = snapshot.statusLabel;
+    refs.focusStatusPill.dataset.status = snapshot.isBreak ? 'break' : snapshot.status;
+  }
+  if (refs.focusRingContainer) {
+    refs.focusRingContainer.dataset.status = snapshot.status;
+    refs.focusRingContainer.dataset.mode = snapshot.mode;
+  }
+  if (refs.focusRingProgress) {
+    const clampedProgress = Math.min(1, Math.max(0, snapshot.progress));
+    const dashOffset = FOCUS_RING_CIRCUMFERENCE * clampedProgress;
+    refs.focusRingProgress.style.strokeDashoffset = dashOffset.toFixed(2);
+  }
+  if (refs.focusStartPauseGlyph && refs.focusStartPauseLabel) {
+    if (snapshot.status === 'running') {
+      refs.focusStartPauseGlyph.textContent = '⏸';
+      refs.focusStartPauseLabel.textContent = 'Pause';
+    } else if (snapshot.status === 'paused') {
+      refs.focusStartPauseGlyph.textContent = '▶';
+      refs.focusStartPauseLabel.textContent = 'Resume';
+    } else {
+      refs.focusStartPauseGlyph.textContent = '▶';
+      refs.focusStartPauseLabel.textContent = snapshot.isBreak ? 'Start Break' : 'Start Focus';
+    }
+  }
+}
+
+function formatSessionTimeLabel(session) {
+  const raw = session.timestamp || session.startedAt;
+  if (!raw) return 'Today';
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return 'Today';
+  return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function resolveSessionTitle(session) {
+  if (session.title && String(session.title).trim()) {
+    return String(session.title).trim();
+  }
+  if (session.taskId) {
+    const task = state.tasks.find((item) => item.id === session.taskId);
+    if (task) return task.title;
+  }
+  const subject = getSubject(session.subjectId);
+  return subject ? `${subject.name} Deep Work` : 'Focus Session';
+}
+
+function renderFocusHistory() {
+  if (!refs.focusHistoryList) return;
+
+  const todayKey = toDateKey(new Date());
+  const todaysSessions = state.sessions
+    .filter((session) => session.date === todayKey)
+    .sort((a, b) => {
+      const timeA = String(a.timestamp || a.startedAt || '');
+      const timeB = String(b.timestamp || b.startedAt || '');
+      return timeB.localeCompare(timeA) || String(b.id).localeCompare(String(a.id));
+    });
+
+  const totalMinutes = todaysSessions.reduce(
+    (sum, session) => sum + (Number(session.durationMinutes) || 0),
+    0,
+  );
+
+  if (refs.focusHistorySummary) {
+    refs.focusHistorySummary.textContent = `${todaysSessions.length} ${
+      todaysSessions.length === 1 ? 'session' : 'sessions'
+    } • ${formatDuration(totalMinutes)}`;
+  }
+
+  if (refs.focusTodayTotalPill) {
+    refs.focusTodayTotalPill.textContent = `${formatDuration(totalMinutes)} logged today`;
+  }
+
+  if (todaysSessions.length === 0) {
+    const empty = createEl('li', 'empty-state empty-state--compact');
+    empty.append(
+      createEl('p', 'empty-state-title', 'No focus sessions logged today yet'),
+      createEl(
+        'p',
+        'empty-state-hint',
+        'Start the timer above or use the manual logger to record your study time.',
+      ),
+    );
+    refs.focusHistoryList.replaceChildren(empty);
+    return;
+  }
+
+  const items = todaysSessions.map((session) => {
+    const subject = getSubject(session.subjectId);
+    const li = createEl('li', 'focus-history-item');
+    li.dataset.sessionId = session.id;
+
+    const left = createEl('div', 'focus-history-left');
+    const badge = createEl(
+      'span',
+      `course-tag${subject ? ` course-tag--${subject.tone}` : ''}`,
+      subject ? subject.code : 'GEN',
+    );
+    const title = createEl('span', 'focus-history-title', resolveSessionTitle(session));
+    left.append(badge, title);
+
+    const right = createEl('div', 'focus-history-right');
+    const timeLabel = createEl('span', 'focus-history-time', formatSessionTimeLabel(session));
+    const durationPill = createEl(
+      'span',
+      'focus-history-duration',
+      `+${formatDuration(session.durationMinutes)}`,
+    );
+
+    const deleteBtn = createEl('button', 'focus-history-delete', '×');
+    deleteBtn.type = 'button';
+    deleteBtn.title = 'Delete session log';
+    deleteBtn.dataset.action = 'delete-session';
+    deleteBtn.dataset.sessionId = session.id;
+    deleteBtn.setAttribute('aria-label', `Delete session: ${resolveSessionTitle(session)}`);
+
+    right.append(timeLabel, durationPill, deleteBtn);
+    li.append(left, right);
+    return li;
+  });
+
+  refs.focusHistoryList.replaceChildren(...items);
+}
+
+function renderFocusView() {
+  populateFocusSelects();
+  renderFocusBoundContext();
+  renderFocusTimerSnapshot();
+  renderFocusHistory();
+}
+
+async function recordAndSyncFocusSession({
+  subjectId,
+  taskId = null,
+  durationMinutes,
+  title = '',
+  startedAt = null,
+}) {
+  const now = new Date();
+  const boundTask = taskId ? state.tasks.find((item) => item.id === taskId) : null;
+  const resolvedSubjectId = subjectId ?? boundTask?.subjectId ?? defaultSubjectId();
+  const subject = getSubject(resolvedSubjectId);
+  const resolvedTitle =
+    String(title || '').trim() ||
+    boundTask?.title ||
+    (subject ? `${subject.name} Focus Session` : 'Focus Session');
+
+  const safeMinutes = Math.max(1, Math.round(Number(durationMinutes) || 25));
+  const timestamp = now.toISOString();
+
+  try {
+    const saved = await addSession({
+      subjectId: resolvedSubjectId,
+      taskId: boundTask ? boundTask.id : null,
+      durationMinutes: safeMinutes,
+      date: toDateKey(now),
+      timestamp,
+      startedAt: startedAt ?? timestamp,
+      title: resolvedTitle,
+    });
+
+    state.sessions.push(saved);
+
+    renderMetrics();
+    renderSubjectsView();
+    renderFocusHistory();
+
+    showToast(
+      `Logged ${formatDuration(safeMinutes)} · ${subject ? subject.code : 'GEN'} — "${resolvedTitle}"`,
+    );
+    return saved;
+  } catch (error) {
+    console.warn('StudyOS: could not log focus session.', error);
+    showToast('Could not save that focus session.', { tone: 'error' });
+    return null;
+  }
+}
+
+async function handleFocusTimerComplete(completed) {
+  playCompletionChime({ muted: state.focus.muted });
+
+  if (completed.isBreak) {
+    selectFocusMode('pomodoro', 25);
+    showToast('Break complete! Ready for your next focus session.');
+    return;
+  }
+
+  await recordAndSyncFocusSession({
+    subjectId: state.focus.subjectId,
+    taskId: state.focus.taskId,
+    durationMinutes: completed.durationMinutes,
+    startedAt: completed.startedAt,
+  });
+}
+
+async function handleCompleteAndLogEarly() {
+  const snapshot = focusTimer.getSnapshot();
+  if (snapshot.isBreak) {
+    focusTimer.reset();
+    selectFocusMode('pomodoro', 25);
+    showToast('Break ended — switched back to Pomodoro (25m).');
+    return;
+  }
+
+  const minutesToLog =
+    snapshot.elapsedSeconds > 0
+      ? Math.max(1, Math.round(snapshot.elapsedSeconds / 60))
+      : snapshot.durationMinutes;
+
+  const startedAt = snapshot.startedAt;
+  focusTimer.reset();
+
+  await recordAndSyncFocusSession({
+    subjectId: state.focus.subjectId,
+    taskId: state.focus.taskId,
+    durationMinutes: minutesToLog,
+    startedAt,
+  });
+}
+
+async function handleManualSessionSubmit(event) {
+  event.preventDefault();
+  const subjectId = refs.focusManualSubject?.value || null;
+  const customTitle = refs.focusManualTitle?.value.trim() || '';
+  const rawMinutes = Number(refs.focusManualDuration?.value || 25);
+  const durationMinutes = clampFocusMinutes(rawMinutes, 25);
+
+  const saved = await recordAndSyncFocusSession({
+    subjectId,
+    taskId: null,
+    durationMinutes,
+    title: customTitle,
+  });
+
+  if (saved && refs.focusManualTitle) {
+    refs.focusManualTitle.value = '';
+  }
+}
+
+async function handleDeleteFocusSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    await deleteSession(sessionId);
+    state.sessions = state.sessions.filter((item) => item.id !== sessionId);
+    renderMetrics();
+    renderSubjectsView();
+    renderFocusHistory();
+    showToast('Removed focus session from history.');
+  } catch (error) {
+    console.warn('StudyOS: could not delete focus session.', error);
+    showToast('Could not remove that focus session.', { tone: 'error' });
+  }
+}
+
+function handleFocusRequestEvent(event) {
+  const detail = event?.detail ?? {};
+  const requestedTaskId = detail.taskId ?? null;
+  const task = requestedTaskId ? state.tasks.find((item) => item.id === requestedTaskId) : null;
+
+  if (task) {
+    state.focus.taskId = task.id;
+    state.focus.subjectId = detail.subjectId ?? task.subjectId ?? defaultSubjectId();
+    const targetMinutes = clampFocusMinutes(
+      detail.durationMinutes ?? task.durationMinutes ?? 25,
+      25,
+    );
+    const matchedMode = matchPresetModeByMinutes(targetMinutes);
+    selectFocusMode(matchedMode, targetMinutes);
+  } else if (!state.focus.subjectId) {
+    state.focus.subjectId = defaultSubjectId();
+  }
+
+  switchView('focus');
+
+  if (task) {
+    showToast(`Loaded "${task.title}" (${formatDuration(state.focus.durationMinutes)})`);
+  }
+  refs.focusStartPauseBtn?.focus();
+}
 
 function requestFocusSession(task = null) {
   document.dispatchEvent(
@@ -1575,11 +2156,6 @@ function requestFocusSession(task = null) {
         ? { taskId: task.id, title: task.title, subjectId: task.subjectId, durationMinutes: task.durationMinutes }
         : { taskId: null },
     }),
-  );
-  showToast(
-    task
-      ? `Focus Mode isn't built yet — "${task.title}" will be ready to start when it lands.`
-      : "Focus Mode isn't built yet — it's coming in a later phase.",
   );
 }
 
@@ -1680,6 +2256,12 @@ function bindEvents() {
     });
   }
 
+  window.addEventListener('hashchange', () => {
+    applyHashRoute({ updateHash: false });
+  });
+
+  document.addEventListener('studyos:focus-request', handleFocusRequestEvent);
+
   refs.taskList.addEventListener('change', handleTaskListChange);
   refs.taskList.addEventListener('click', handleTaskListClick);
 
@@ -1721,6 +2303,141 @@ function bindEvents() {
     refs.tasksSortSelect.addEventListener('change', () => {
       state.tasksFilter.sort = refs.tasksSortSelect.value;
       renderTasksView();
+    });
+  }
+
+  // Focus Mode events
+  if (refs.focusModePills) {
+    refs.focusModePills.addEventListener('click', (event) => {
+      const pill = event.target.closest('.focus-mode-pill[data-focus-mode]');
+      if (!pill) return;
+      const mode = pill.dataset.focusMode;
+      const mins = Number(pill.dataset.minutes) || 25;
+      selectFocusMode(mode, mins);
+    });
+  }
+
+  const applyCustomFocusMinutes = () => {
+    if (!refs.focusCustomMinutes) return;
+    const clamped = clampFocusMinutes(refs.focusCustomMinutes.value, 30);
+    refs.focusCustomMinutes.value = String(clamped);
+    selectFocusMode('custom', clamped);
+  };
+
+  if (refs.focusCustomApplyBtn) {
+    refs.focusCustomApplyBtn.addEventListener('click', applyCustomFocusMinutes);
+  }
+
+  if (refs.focusCustomMinutes) {
+    refs.focusCustomMinutes.addEventListener('change', applyCustomFocusMinutes);
+    refs.focusCustomMinutes.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        applyCustomFocusMinutes();
+      }
+    });
+  }
+
+  if (refs.focusTaskSelect) {
+    refs.focusTaskSelect.addEventListener('change', () => {
+      const taskId = refs.focusTaskSelect.value || null;
+      state.focus.taskId = taskId;
+      if (taskId) {
+        const task = state.tasks.find((item) => item.id === taskId);
+        if (task) {
+          if (task.subjectId) {
+            state.focus.subjectId = task.subjectId;
+            if (refs.focusSubjectSelect) refs.focusSubjectSelect.value = task.subjectId;
+          }
+        }
+      }
+      renderSubjectSelection();
+      populateFocusSelects();
+      renderFocusBoundContext();
+    });
+  }
+
+  if (refs.focusSubjectSelect) {
+    refs.focusSubjectSelect.addEventListener('change', () => {
+      const nextSubjId = refs.focusSubjectSelect.value || null;
+      state.focus.subjectId = nextSubjId;
+      if (state.focus.taskId) {
+        const task = state.tasks.find((item) => item.id === state.focus.taskId);
+        if (task && (task.subjectId || null) !== nextSubjId) {
+          state.focus.taskId = null;
+          if (refs.focusTaskSelect) refs.focusTaskSelect.value = '';
+        }
+      }
+      renderSubjectSelection();
+      populateFocusSelects();
+      renderFocusBoundContext();
+    });
+  }
+
+  if (refs.focusMarkTaskDoneBtn) {
+    refs.focusMarkTaskDoneBtn.addEventListener('click', async () => {
+      if (!state.focus.taskId) return;
+      const taskId = state.focus.taskId;
+      const updated = await toggleTask(taskId);
+      if (updated && updated.completed) {
+        state.focus.taskId = null;
+        renderFocusView();
+        showToast(`Completed "${updated.title}"!`);
+      }
+    });
+  }
+
+  if (refs.focusStartPauseBtn) {
+    refs.focusStartPauseBtn.addEventListener('click', () => {
+      focusTimer.toggle();
+    });
+  }
+
+  if (refs.focusResetBtn) {
+    refs.focusResetBtn.addEventListener('click', () => {
+      focusTimer.reset();
+    });
+  }
+
+  if (refs.focusCompleteLogBtn) {
+    refs.focusCompleteLogBtn.addEventListener('click', () => {
+      handleCompleteAndLogEarly();
+    });
+  }
+
+  if (refs.focusZenBtn) {
+    refs.focusZenBtn.addEventListener('click', () => {
+      setZenMode(!state.focus.zenMode);
+    });
+  }
+
+  if (refs.focusMuteBtn) {
+    refs.focusMuteBtn.addEventListener('click', () => {
+      setFocusMuted(!state.focus.muted);
+    });
+  }
+
+  if (refs.focusToggleManualBtn && refs.focusManualForm) {
+    refs.focusToggleManualBtn.addEventListener('click', () => {
+      const isHidden = refs.focusManualForm.hidden;
+      refs.focusManualForm.hidden = !isHidden;
+      refs.focusToggleManualBtn.setAttribute('aria-expanded', String(!refs.focusManualForm.hidden));
+      if (!refs.focusManualForm.hidden) {
+        refs.focusManualTitle?.focus();
+      }
+    });
+  }
+
+  if (refs.focusManualForm) {
+    refs.focusManualForm.addEventListener('submit', handleManualSessionSubmit);
+  }
+
+  if (refs.focusHistoryList) {
+    refs.focusHistoryList.addEventListener('click', (event) => {
+      const delBtn = event.target.closest('[data-action="delete-session"]');
+      if (delBtn) {
+        handleDeleteFocusSession(delBtn.dataset.sessionId);
+      }
     });
   }
 
@@ -1817,6 +2534,13 @@ function bindEvents() {
   refs.startFocusButton.addEventListener('click', () => requestFocusSession());
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.focus.zenMode && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      setZenMode(false);
+      showToast('Exited Zen Mode.');
+      return;
+    }
+
     const isOptN = event.altKey && !event.metaKey && !event.ctrlKey && event.code === 'KeyN';
     const isCmdOrCtrlN =
       (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n';
@@ -2001,6 +2725,37 @@ function cacheElements() {
     taskDueLabelInput: byId('task-duelabel-input'),
     taskNotesInput: byId('task-notes-input'),
     taskFormError: byId('task-form-error'),
+    focusView: byId('focus-view'),
+    focusTodayTotalPill: byId('focus-today-total-pill'),
+    focusMuteBtn: byId('focus-mute-btn'),
+    focusMuteLabel: byId('focus-mute-label'),
+    focusZenBtn: byId('focus-zen-btn'),
+    focusZenLabel: byId('focus-zen-label'),
+    focusTaskSelect: byId('focus-task-select'),
+    focusSubjectSelect: byId('focus-subject-select'),
+    focusMarkTaskDoneBtn: byId('focus-mark-task-done-btn'),
+    focusModePills: byId('focus-mode-pills'),
+    focusCustomMinutes: byId('focus-custom-minutes'),
+    focusCustomApplyBtn: byId('focus-custom-apply-btn'),
+    focusRingContainer: byId('focus-ring-container'),
+    focusRingProgress: byId('focus-ring-progress'),
+    focusStatusPill: byId('focus-status-pill'),
+    focusTimerDisplay: byId('focus-timer-display'),
+    focusBoundTag: byId('focus-bound-tag'),
+    focusBoundTitle: byId('focus-bound-title'),
+    focusElapsedDisplay: byId('focus-elapsed-display'),
+    focusStartPauseBtn: byId('focus-start-pause-btn'),
+    focusStartPauseGlyph: byId('focus-start-pause-glyph'),
+    focusStartPauseLabel: byId('focus-start-pause-label'),
+    focusResetBtn: byId('focus-reset-btn'),
+    focusCompleteLogBtn: byId('focus-complete-log-btn'),
+    focusHistorySummary: byId('focus-history-summary'),
+    focusToggleManualBtn: byId('focus-toggle-manual-btn'),
+    focusManualForm: byId('focus-manual-form'),
+    focusManualSubject: byId('focus-manual-subject'),
+    focusManualTitle: byId('focus-manual-title'),
+    focusManualDuration: byId('focus-manual-duration'),
+    focusHistoryList: byId('focus-history-list'),
     greeting: byId('greeting-title'),
     dateDisplay: byId('current-date-display'),
     tasksDone: byId('metric-tasks-done'),
@@ -2029,6 +2784,19 @@ function cacheElements() {
 
 async function init() {
   cacheElements();
+
+  // Restore saved chime mute preference if available
+  try {
+    if (localStorage.getItem('studyos_focus_muted') === '1') {
+      setFocusMuted(true);
+    }
+  } catch {
+    // Ignore localStorage restrictions
+  }
+
+  // Immediately isolate the active view based on URL hash before async DB work
+  applyHashRoute({ updateHash: false });
+
   renderHeader();
   setInterval(renderHeader, 60_000); // keep greeting/date right across the day
   bindEvents();
@@ -2043,6 +2811,9 @@ async function init() {
     ]);
 
     Object.assign(state, { subjects, tasks, sessions, blocks });
+    if (!state.focus.subjectId && subjects.length > 0) {
+      state.focus.subjectId = defaultSubjectId();
+    }
     setStorageStatus(true);
 
     renderSubjects();
@@ -2051,14 +2822,11 @@ async function init() {
     renderFilters();
     renderTaskList();
     renderTasksView();
+    renderFocusView();
     renderMetrics();
     renderPlannedBlocks();
 
-    if (window.location.hash === '#subjects') {
-      switchView('subjects');
-    } else if (window.location.hash === '#tasks') {
-      switchView('tasks');
-    }
+    applyHashRoute({ updateHash: false });
 
     await ensureTodaysPlan();
     resolveReady();
@@ -2069,7 +2837,9 @@ async function init() {
     renderSubjectsView();
     renderTaskList();
     renderTasksView();
+    renderFocusView();
     renderPlannedBlocks();
+    applyHashRoute({ updateHash: false });
     showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });
     rejectReady(error);
   }
