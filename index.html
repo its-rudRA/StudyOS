@@ -31,14 +31,14 @@
         </div>
 
         <nav class="sidebar-nav" aria-label="Main navigation">
-          <a href="#dashboard" class="nav-item active" aria-current="page">
+          <a href="#dashboard" class="nav-item active" data-view="dashboard" aria-current="page">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>
             </svg>
             <span class="nav-label">Dashboard</span>
           </a>
 
-          <a href="#subjects" class="nav-item">
+          <a href="#subjects" class="nav-item" data-view="subjects">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>
             </svg>
@@ -46,7 +46,7 @@
             <span class="nav-counter" id="badge-subjects">4</span>
           </a>
 
-          <a href="#tasks" class="nav-item">
+          <a href="#tasks" class="nav-item" data-view="tasks">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>
             </svg>
@@ -54,7 +54,7 @@
             <span class="nav-counter" id="badge-tasks">2</span>
           </a>
 
-          <a href="#calendar" class="nav-item">
+          <a href="#calendar" class="nav-item" data-view="calendar">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>
             </svg>
@@ -62,14 +62,14 @@
             <span class="nav-counter">3</span>
           </a>
 
-          <a href="#focus" class="nav-item">
+          <a href="#focus" class="nav-item" data-view="focus">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>
             </svg>
             <span class="nav-label">Focus Mode</span>
           </a>
 
-          <a href="#analytics" class="nav-item">
+          <a href="#analytics" class="nav-item" data-view="analytics">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/>
             </svg>
@@ -80,7 +80,7 @@
         <section class="sidebar-section" aria-labelledby="pinned-subjects-title">
           <div class="sidebar-section-header">
             <h2 class="section-title" id="pinned-subjects-title">Pinned Subjects</h2>
-            <button type="button" class="icon-btn" aria-label="Pin a subject" title="Pin a subject">
+            <button type="button" class="icon-btn" id="sidebar-add-subject-btn" aria-label="New subject" title="New subject">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M5 12h14"/><path d="M12 5v14"/>
               </svg>
@@ -379,10 +379,114 @@
 
         </main>
 
+        <!-- ===================== Module 2: Subjects & Courses View ===================== -->
+        <section id="subjects-view" class="subjects-view" hidden aria-labelledby="subjects-view-title">
+          <div class="subjects-toolbar">
+            <div class="subjects-toolbar-info">
+              <h2 id="subjects-view-title" class="subjects-view-title">Subjects &amp; Courses</h2>
+              <p class="subjects-view-subtitle" id="subjects-summary-text">
+                Track completion rates, logged focus hours, and active coursework across your enrolled subjects.
+              </p>
+            </div>
+            <button type="button" class="btn-primary" id="new-subject-btn">
+              <span aria-hidden="true">+</span>
+              <span>New Subject</span>
+            </button>
+          </div>
+
+          <div class="subjects-grid" id="subjects-grid" role="list"></div>
+        </section>
+
       </div>
     </div>
 
   </div>
+
+  <!-- ===================== Create / Edit Subject Modal ===================== -->
+  <dialog id="subject-modal" class="subject-modal" aria-labelledby="subject-modal-title">
+    <form id="subject-form" class="modal-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <h2 id="subject-modal-title" class="modal-title">New Subject</h2>
+        <button type="button" class="modal-close" id="subject-modal-close" aria-label="Close modal">×</button>
+      </header>
+
+      <div class="modal-body">
+        <input type="hidden" id="subject-id-input" name="id" />
+
+        <div class="form-field">
+          <label for="subject-code-input" class="form-label">Course Code</label>
+          <input
+            type="text"
+            id="subject-code-input"
+            name="code"
+            class="form-input form-input--mono"
+            placeholder="e.g., CS-301"
+            maxlength="16"
+            autocomplete="off"
+            required
+          />
+          <span class="form-hint">Short course identifier displayed on badges and schedule blocks.</span>
+        </div>
+
+        <div class="form-field">
+          <label for="subject-name-input" class="form-label">Subject Title</label>
+          <input
+            type="text"
+            id="subject-name-input"
+            name="name"
+            class="form-input"
+            placeholder="e.g., Algorithms"
+            maxlength="60"
+            autocomplete="off"
+            required
+          />
+        </div>
+
+        <fieldset class="form-field form-fieldset">
+          <legend class="form-label">Color Tone</legend>
+          <div class="tone-picker" role="radiogroup" aria-label="Color tone">
+            <label class="tone-option tone-option--blue">
+              <input type="radio" name="tone" value="blue" checked />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Blue</span>
+            </label>
+            <label class="tone-option tone-option--green">
+              <input type="radio" name="tone" value="green" />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Green</span>
+            </label>
+            <label class="tone-option tone-option--amber">
+              <input type="radio" name="tone" value="amber" />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Amber</span>
+            </label>
+            <label class="tone-option tone-option--pink">
+              <input type="radio" name="tone" value="pink" />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Pink</span>
+            </label>
+            <label class="tone-option tone-option--violet">
+              <input type="radio" name="tone" value="violet" />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Violet</span>
+            </label>
+            <label class="tone-option tone-option--cyan">
+              <input type="radio" name="tone" value="cyan" />
+              <span class="tone-swatch" aria-hidden="true"></span>
+              <span class="tone-name">Cyan</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <p id="subject-form-error" class="form-error" role="alert" hidden></p>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" id="subject-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" id="subject-save-btn">Save Subject</button>
+      </footer>
+    </form>
+  </dialog>
 
   <script type="module" src="js/app.js"></script>
 </body>

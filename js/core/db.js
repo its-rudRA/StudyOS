@@ -73,20 +73,32 @@ function transactionDone(tx) {
   });
 }
 
+export const SUBJECT_TONES = Object.freeze(['blue', 'green', 'amber', 'pink', 'violet', 'cyan']);
+
 /* ==========================================================================
    Normalizers
    ========================================================================== */
 
+function slugifySubjectCode(code) {
+  return String(code ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function normalizeSubject(input) {
   const code = String(input.code ?? '').trim().toUpperCase();
-  const id = String(input.id ?? code.toLowerCase()).trim();
+  const explicitId = input.id !== undefined && input.id !== null ? String(input.id).trim() : '';
+  const id = explicitId || slugifySubjectCode(code);
   if (!id) throw new Error('A subject needs an id or a course code.');
+  const tone = SUBJECT_TONES.includes(input.tone) ? input.tone : 'blue';
   return {
     ...input,
     id,
     code: code || id.toUpperCase(),
     name: String(input.name ?? '').trim(),
-    tone: input.tone ?? 'blue',
+    tone,
     pinned: input.pinned ?? true,
   };
 }
@@ -236,7 +248,73 @@ export async function getAllSubjects() {
 }
 
 export async function addSubject(subject) {
-  return putOne(STORES.SUBJECTS, normalizeSubject(subject));
+  const existing = await getAllSubjects();
+  const existingIds = new Set(existing.map((item) => item.id));
+  const maxOrder = existing.reduce(
+    (max, item) => (Number.isFinite(item.order) ? Math.max(max, item.order) : max),
+    -1,
+  );
+
+  const explicitId = subject?.id !== undefined && subject?.id !== null ? String(subject.id).trim() : '';
+  let id = explicitId || slugifySubjectCode(subject?.code);
+  if (!explicitId && id && existingIds.has(id)) {
+    let suffix = 2;
+    while (existingIds.has(`${id}-${suffix}`)) suffix += 1;
+    id = `${id}-${suffix}`;
+  }
+
+  const normalized = normalizeSubject({
+    ...subject,
+    id: id || generateId('subj'),
+    order: Number.isFinite(subject?.order) ? subject.order : maxOrder + 1,
+  });
+  return putOne(STORES.SUBJECTS, normalized);
+}
+
+export async function updateSubject(subject) {
+  if (!subject || !subject.id) throw new Error('updateSubject requires a subject with an id.');
+  const db = await initDB();
+  const current = await promisify(
+    db.transaction(STORES.SUBJECTS, 'readonly').objectStore(STORES.SUBJECTS).get(subject.id),
+  );
+  const merged = normalizeSubject({
+    ...(current ?? {}),
+    ...subject,
+    id: subject.id,
+  });
+  return putOne(STORES.SUBJECTS, merged);
+}
+
+/**
+ * Deletes a subject and unassigns (or removes when `deleteTasks: true`) its tasks
+ * within a single atomic IndexedDB transaction.
+ */
+export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
+  const id = String(subjectId ?? '').trim();
+  if (!id) return false;
+
+  const db = await initDB();
+  const tx = db.transaction([STORES.SUBJECTS, STORES.TASKS], 'readwrite');
+  const subjectStore = tx.objectStore(STORES.SUBJECTS);
+  const taskStore = tx.objectStore(STORES.TASKS);
+
+  subjectStore.delete(id);
+
+  const tasksRequest = taskStore.getAll();
+  tasksRequest.onsuccess = () => {
+    const tasks = tasksRequest.result ?? [];
+    for (const task of tasks) {
+      if (task.subjectId !== id) continue;
+      if (deleteTasks) {
+        taskStore.delete(task.id);
+      } else {
+        taskStore.put(normalizeTask({ ...task, subjectId: null }));
+      }
+    }
+  };
+
+  await transactionDone(tx);
+  return true;
 }
 
 /* ==========================================================================

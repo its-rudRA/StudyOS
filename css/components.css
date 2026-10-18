@@ -184,10 +184,12 @@
   color: var(--text-primary);
 }
 
-.subject-item--blue  { --subject-color: var(--color-blue); }
-.subject-item--green { --subject-color: var(--color-green); }
-.subject-item--amber { --subject-color: var(--color-amber); }
-.subject-item--pink  { --subject-color: var(--color-pink); }
+.subject-item--blue   { --subject-color: var(--color-blue); }
+.subject-item--green  { --subject-color: var(--color-green); }
+.subject-item--amber  { --subject-color: var(--color-amber); }
+.subject-item--pink   { --subject-color: var(--color-pink); }
+.subject-item--violet { --subject-color: var(--color-violet); }
+.subject-item--cyan   { --subject-color: var(--color-cyan); }
 
 .subject-dot {
   width: 8px;
@@ -357,10 +359,12 @@
    Shared: subject tones, tags, badges, ghost buttons, utilities
    -------------------------------------------------------------------------- */
 
-.tone-blue  { --subject-color: var(--color-blue); }
-.tone-green { --subject-color: var(--color-green); }
-.tone-amber { --subject-color: var(--color-amber); }
-.tone-pink  { --subject-color: var(--color-pink); }
+.tone-blue   { --subject-color: var(--color-blue); }
+.tone-green  { --subject-color: var(--color-green); }
+.tone-amber  { --subject-color: var(--color-amber); }
+.tone-pink   { --subject-color: var(--color-pink); }
+.tone-violet { --subject-color: var(--color-violet); }
+.tone-cyan   { --subject-color: var(--color-cyan); }
 
 .course-tag {
   --tag-color: var(--text-secondary);
@@ -378,10 +382,12 @@
   border-radius: var(--radius-sm);
 }
 
-.course-tag--blue  { --tag-color: var(--color-blue); }
-.course-tag--green { --tag-color: var(--color-green); }
-.course-tag--amber { --tag-color: var(--color-amber); }
-.course-tag--pink  { --tag-color: var(--color-pink); }
+.course-tag--blue   { --tag-color: var(--color-blue); }
+.course-tag--green  { --tag-color: var(--color-green); }
+.course-tag--amber  { --tag-color: var(--color-amber); }
+.course-tag--pink   { --tag-color: var(--color-pink); }
+.course-tag--violet { --tag-color: var(--color-violet); }
+.course-tag--cyan   { --tag-color: var(--color-cyan); }
 
 .priority-badge {
   display: inline-flex;
@@ -1433,3 +1439,453 @@
     max-width: none;
   }
 }
+
+/* ==========================================================================
+   Module 2: Subjects & Courses View (#subjects-view)
+   ========================================================================== */
+
+.subjects-view {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  animation: view-fade-in 0.2s ease;
+}
+
+@keyframes view-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.subjects-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  padding: 20px 24px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--border-highlight);
+}
+
+.subjects-toolbar-info {
+  min-width: 0;
+}
+
+.subjects-view-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.subjects-view-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.subjects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.subject-card {
+  --subject-color: var(--color-blue);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-top: 3px solid var(--subject-color);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--border-highlight);
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.subject-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--subject-color) 42%, var(--border-subtle));
+  border-top-color: var(--subject-color);
+  box-shadow:
+    inset 0 1px 0 var(--border-highlight),
+    0 10px 28px rgba(0, 0, 0, 0.32);
+}
+
+.subject-card--blue   { --subject-color: var(--color-blue); }
+.subject-card--green  { --subject-color: var(--color-green); }
+.subject-card--amber  { --subject-color: var(--color-amber); }
+.subject-card--pink   { --subject-color: var(--color-pink); }
+.subject-card--violet { --subject-color: var(--color-violet); }
+.subject-card--cyan   { --subject-color: var(--color-cyan); }
+
+.subject-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subject-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.subject-card-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subject-card-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.subject-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-card-action:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.btn-card-action--danger:hover {
+  color: var(--priority-high-text);
+  background-color: var(--priority-high-bg);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.subject-card-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.subject-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.subject-progress-counts {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.subject-progress-pct {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--subject-color);
+}
+
+.subject-card .progress-fill {
+  background: var(--subject-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--subject-color) 45%, transparent);
+}
+
+.subject-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.subject-focus-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.subject-focus-stat svg {
+  color: var(--subject-color);
+}
+
+.subject-focus-stat strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subject-pending-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   Create / Edit Subject Modal (<dialog id="subject-modal">)
+   ========================================================================== */
+
+.subject-modal {
+  width: min(460px, calc(100vw - 32px));
+  margin: auto;
+  padding: 0;
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 1px 0 var(--border-highlight),
+    0 24px 60px rgba(0, 0, 0, 0.65);
+}
+
+.subject-modal::backdrop {
+  background-color: rgba(6, 7, 11, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.subject-modal[open] {
+  animation: modal-pop 0.18s ease-out;
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-hover);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 22px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.form-fieldset > .form-label {
+  margin-bottom: 8px;
+}
+
+.form-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.form-input--mono {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.form-input--mono::placeholder {
+  text-transform: none;
+}
+
+.form-input::placeholder {
+  color: var(--text-muted);
+}
+
+.form-input:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.form-input:focus {
+  border-color: rgba(99, 102, 241, 0.65);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.form-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.tone-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tone-option {
+  --swatch-color: var(--color-blue);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background-color: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.tone-option--blue   { --swatch-color: var(--color-blue); }
+.tone-option--green  { --swatch-color: var(--color-green); }
+.tone-option--amber  { --swatch-color: var(--color-amber); }
+.tone-option--pink   { --swatch-color: var(--color-pink); }
+.tone-option--violet { --swatch-color: var(--color-violet); }
+.tone-option--cyan   { --swatch-color: var(--color-cyan); }
+
+.tone-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tone-swatch {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background-color: var(--swatch-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--swatch-color) 60%, transparent);
+}
+
+.tone-option:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+}
+
+.tone-option:has(input:checked) {
+  color: var(--text-primary);
+  background-color: color-mix(in srgb, var(--swatch-color) 14%, var(--bg-canvas));
+  border-color: color-mix(in srgb, var(--swatch-color) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--swatch-color) 30%, transparent);
+}
+
+.tone-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent-indigo);
+  outline-offset: 2px;
+}
+
+.form-error {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--priority-high-text);
+  background-color: var(--priority-high-bg);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 640px) {
+  .subjects-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tone-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+

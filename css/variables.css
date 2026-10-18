@@ -31,6 +31,8 @@
   --color-green: #34D399;  /* MATH-204 */
   --color-amber: #FBBF24;  /* PHYS-102 */
   --color-pink: #F472B6;   /* HUM-110 */
+  --color-violet: #A78BFA;
+  --color-cyan: #22D3EE;
 
   /* Priority semantic colors */
   --priority-high-bg: rgba(239, 68, 68, 0.12);
@@ -58,6 +60,10 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 html {

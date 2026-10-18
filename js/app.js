@@ -10,6 +10,10 @@
 import {
   initDB,
   getAllSubjects,
+  addSubject,
+  updateSubject,
+  deleteSubject,
+  SUBJECT_TONES,
   getAllTasks,
   addTask,
   toggleTaskCompletion,
@@ -47,11 +51,15 @@ const PRIORITY_META = Object.freeze({
 const ICON_CHECK =
   '<svg class="block-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-label="Completed" role="img"><path d="M20 6 9 17l-5-5"/></svg>';
 
+const ICON_CLOCK =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+
 /* ==========================================================================
    State
    ========================================================================== */
 
 const state = {
+  view: 'dashboard', // 'dashboard' | 'subjects'
   subjects: [],
   tasks: [],
   sessions: [],
@@ -283,10 +291,359 @@ function renderSubjectSelection() {
 }
 
 function setSubjectFilter(subjectId) {
-  state.subjectId = state.subjectId === subjectId ? null : subjectId; // second click clears
+  if (state.view !== 'dashboard') {
+    state.subjectId = subjectId;
+    switchView('dashboard');
+  } else {
+    state.subjectId = state.subjectId === subjectId ? null : subjectId; // second click clears
+  }
   renderSubjectSelection();
   renderCounts();
   renderTaskList();
+}
+
+/* ==========================================================================
+   SPA View Navigation & Module 2: Subjects & Courses View
+   ========================================================================== */
+
+const UPCOMING_VIEW_LABELS = Object.freeze({
+  tasks: 'Full Task Manager',
+  calendar: 'Academic Calendar',
+  focus: 'Focus Mode',
+  analytics: 'Analytics',
+});
+
+function switchView(viewName) {
+  if (viewName !== 'dashboard' && viewName !== 'subjects') {
+    const label = UPCOMING_VIEW_LABELS[viewName] ?? 'That module';
+    showToast(`${label} is coming in a later phase.`);
+    return;
+  }
+
+  state.view = viewName;
+
+  if (refs.dashboardView) refs.dashboardView.hidden = viewName !== 'dashboard';
+  if (refs.subjectsView) refs.subjectsView.hidden = viewName !== 'subjects';
+
+  refs.navItems.forEach((link) => {
+    const isActive = link.dataset.view === viewName;
+    link.classList.toggle('active', isActive);
+    if (isActive) {
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.removeAttribute('aria-current');
+    }
+  });
+
+  if (viewName === 'subjects') {
+    renderSubjectsView();
+  }
+}
+
+function getSubjectFocusMinutes(subjectId) {
+  return state.sessions
+    .filter((session) => session.subjectId === subjectId)
+    .reduce((sum, session) => sum + (Number(session.durationMinutes) || 0), 0);
+}
+
+function createSubjectCardElement(subject) {
+  const tone = SUBJECT_TONES.includes(subject.tone) ? subject.tone : 'blue';
+  const subjectTasks = state.tasks.filter((task) => task.subjectId === subject.id);
+  const totalTasks = subjectTasks.length;
+  const doneTasks = subjectTasks.filter((task) => task.completed).length;
+  const pendingTasks = totalTasks - doneTasks;
+  const pct = totalTasks === 0 ? 0 : Math.round((doneTasks / totalTasks) * 100);
+  const focusMinutes = getSubjectFocusMinutes(subject.id);
+
+  const card = createEl('article', `subject-card subject-card--${tone}`);
+  card.setAttribute('role', 'listitem');
+  card.dataset.subjectId = subject.id;
+
+  // Card header: badge + title on left, Edit / Delete buttons on right
+  const header = createEl('header', 'subject-card-header');
+  const heading = createEl('div', 'subject-card-heading');
+  const badgeRow = createEl('div', 'subject-card-badge-row');
+  const dot = createEl('span', 'subject-dot');
+  dot.setAttribute('aria-hidden', 'true');
+  const badge = createEl('span', `course-tag course-tag--${tone}`, subject.code);
+  badgeRow.append(dot, badge);
+
+  const title = createEl('h3', 'subject-card-title', subject.name);
+  heading.append(badgeRow, title);
+
+  const actions = createEl('div', 'subject-card-actions');
+  const editBtn = createEl('button', 'btn-card-action', 'Edit');
+  editBtn.type = 'button';
+  editBtn.dataset.action = 'edit-subject';
+  editBtn.dataset.subjectId = subject.id;
+  editBtn.setAttribute('aria-label', `Edit ${subject.code} ${subject.name}`);
+
+  const deleteBtn = createEl('button', 'btn-card-action btn-card-action--danger', 'Delete');
+  deleteBtn.type = 'button';
+  deleteBtn.dataset.action = 'delete-subject';
+  deleteBtn.dataset.subjectId = subject.id;
+  deleteBtn.setAttribute('aria-label', `Delete ${subject.code} ${subject.name}`);
+
+  actions.append(editBtn, deleteBtn);
+  header.append(heading, actions);
+
+  // Completion progress bar ("X of Y tasks done")
+  const progressSection = createEl('div', 'subject-card-progress');
+  const progressMeta = createEl('div', 'subject-progress-meta');
+  progressMeta.append(
+    createEl('span', 'subject-progress-counts', `${doneTasks} of ${totalTasks} tasks done`),
+    createEl('span', 'subject-progress-pct', `${pct}%`),
+  );
+
+  const track = createEl('div', 'progress-track');
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  track.setAttribute('aria-valuenow', String(pct));
+  track.setAttribute('aria-label', `${subject.code} task completion`);
+
+  const fill = createEl('div', 'progress-fill');
+  fill.style.width = `${pct}%`;
+  track.append(fill);
+  progressSection.append(progressMeta, track);
+
+  // Footer: total logged focus time from sessions + pending count
+  const footer = createEl('footer', 'subject-card-footer');
+  const focusStat = createEl('div', 'subject-focus-stat');
+  focusStat.insertAdjacentHTML('beforeend', ICON_CLOCK);
+  const focusText = createEl('span');
+  const focusStrong = createEl('strong', '', formatDuration(focusMinutes));
+  focusText.append(focusStrong, document.createTextNode(' focus logged'));
+  focusStat.append(focusText);
+
+  const pendingPill = createEl(
+    'span',
+    'subject-pending-pill',
+    totalTasks === 0
+      ? 'No tasks yet'
+      : pendingTasks === 0
+        ? 'All tasks complete'
+        : `${pendingTasks} pending`,
+  );
+
+  footer.append(focusStat, pendingPill);
+
+  card.append(header, progressSection, footer);
+  return card;
+}
+
+function renderSubjectsView() {
+  if (!refs.subjectsGrid) return;
+
+  const totalSubjects = state.subjects.length;
+  const totalTasks = state.tasks.filter((task) => task.subjectId).length;
+  const doneTasks = state.tasks.filter((task) => task.subjectId && task.completed).length;
+  const totalFocusMinutes = state.sessions.reduce(
+    (sum, session) => sum + (Number(session.durationMinutes) || 0),
+    0,
+  );
+
+  if (refs.subjectsSummaryText) {
+    refs.subjectsSummaryText.textContent = `${totalSubjects} enrolled ${
+      totalSubjects === 1 ? 'course' : 'courses'
+    } • ${doneTasks} of ${totalTasks} course tasks done • ${formatDuration(totalFocusMinutes)} total focus logged`;
+  }
+
+  if (totalSubjects === 0) {
+    const empty = createEl('div', 'empty-state card');
+    empty.append(
+      createEl('p', 'empty-state-title', 'No subjects added yet'),
+      createEl(
+        'p',
+        'empty-state-hint',
+        'Create your first course to organize tasks, track completion progress, and log focus hours.',
+      ),
+    );
+    const addBtn = createEl('button', 'btn-primary', '+ New Subject');
+    addBtn.type = 'button';
+    addBtn.dataset.action = 'new-subject-empty';
+    empty.append(addBtn);
+    refs.subjectsGrid.replaceChildren(empty);
+    return;
+  }
+
+  refs.subjectsGrid.replaceChildren(...state.subjects.map(createSubjectCardElement));
+}
+
+function showSubjectFormError(message) {
+  if (!refs.subjectFormError) return;
+  if (!message) {
+    refs.subjectFormError.textContent = '';
+    refs.subjectFormError.hidden = true;
+  } else {
+    refs.subjectFormError.textContent = message;
+    refs.subjectFormError.hidden = false;
+  }
+}
+
+function openSubjectModal(subject = null) {
+  if (!refs.subjectModal || !refs.subjectForm) return;
+
+  const isEdit = Boolean(subject && subject.id);
+  refs.subjectModalTitle.textContent = isEdit ? 'Edit Subject' : 'New Subject';
+  refs.subjectSaveBtn.textContent = isEdit ? 'Save Changes' : 'Save Subject';
+
+  refs.subjectIdInput.value = isEdit ? subject.id : '';
+  refs.subjectCodeInput.value = isEdit ? subject.code : '';
+  refs.subjectNameInput.value = isEdit ? subject.name : '';
+
+  const selectedTone = isEdit && SUBJECT_TONES.includes(subject.tone) ? subject.tone : 'blue';
+  const radio = refs.subjectForm.querySelector(`input[name="tone"][value="${selectedTone}"]`);
+  if (radio) radio.checked = true;
+
+  showSubjectFormError('');
+
+  if (typeof refs.subjectModal.showModal === 'function') {
+    if (!refs.subjectModal.open) refs.subjectModal.showModal();
+  } else {
+    refs.subjectModal.setAttribute('open', '');
+  }
+
+  refs.subjectCodeInput.focus();
+  refs.subjectCodeInput.select();
+}
+
+function closeSubjectModal() {
+  if (!refs.subjectModal) return;
+  showSubjectFormError('');
+  if (typeof refs.subjectModal.close === 'function' && refs.subjectModal.open) {
+    refs.subjectModal.close();
+  } else {
+    refs.subjectModal.removeAttribute('open');
+  }
+}
+
+async function handleSubjectFormSubmit(event) {
+  event.preventDefault();
+
+  const editingId = refs.subjectIdInput.value.trim();
+  const code = refs.subjectCodeInput.value.trim().toUpperCase();
+  const name = refs.subjectNameInput.value.trim();
+  const checkedRadio = refs.subjectForm.querySelector('input[name="tone"]:checked');
+  const tone = checkedRadio && SUBJECT_TONES.includes(checkedRadio.value) ? checkedRadio.value : 'blue';
+
+  if (!code) {
+    showSubjectFormError('Please enter a course code (for example, CS-301).');
+    refs.subjectCodeInput.focus();
+    return;
+  }
+
+  if (!name) {
+    showSubjectFormError('Please enter a subject title (for example, Algorithms).');
+    refs.subjectNameInput.focus();
+    return;
+  }
+
+  const duplicate = state.subjects.find(
+    (subject) => subject.code.toUpperCase() === code && subject.id !== editingId,
+  );
+  if (duplicate) {
+    showSubjectFormError(`A subject with course code "${code}" already exists.`);
+    refs.subjectCodeInput.focus();
+    return;
+  }
+
+  refs.subjectSaveBtn.disabled = true;
+  try {
+    let saved;
+    if (editingId) {
+      saved = await updateSubject({ id: editingId, code, name, tone });
+    } else {
+      saved = await addSubject({ code, name, tone, pinned: true });
+    }
+
+    state.subjects = await getAllSubjects();
+
+    // Keep schedule block labels/tones synchronized if an existing subject was edited.
+    if (editingId && state.blocks.length > 0) {
+      const taskSubjectMap = new Map(state.tasks.map((task) => [task.id, task.subjectId]));
+      let blocksChanged = false;
+      const updatedBlocks = state.blocks.map((block) => {
+        const blockSubjId = block.subjectId ?? (block.taskId ? taskSubjectMap.get(block.taskId) : null);
+        if (blockSubjId === saved.id) {
+          blocksChanged = true;
+          return {
+            ...block,
+            subjectCode: saved.code,
+            subjectName: saved.name,
+            tone: saved.tone,
+          };
+        }
+        return block;
+      });
+      if (blocksChanged) await commitBlocks(updatedBlocks);
+    }
+
+    renderSubjects();
+    renderSubjectsView();
+    renderTaskList();
+    renderMetrics();
+    closeSubjectModal();
+
+    showToast(
+      editingId
+        ? `Updated "${saved.code} — ${saved.name}"`
+        : `Added "${saved.code} — ${saved.name}"`,
+    );
+  } catch (error) {
+    console.warn('StudyOS: could not save subject.', error);
+    showSubjectFormError('Could not save that subject. Please try again.');
+  } finally {
+    refs.subjectSaveBtn.disabled = false;
+  }
+}
+
+async function handleDeleteSubject(subjectId) {
+  const subject = getSubject(subjectId);
+  if (!subject) return;
+
+  const linkedTaskCount = state.tasks.filter((task) => task.subjectId === subject.id).length;
+  const confirmMessage =
+    linkedTaskCount > 0
+      ? `Delete "${subject.code} — ${subject.name}"?\n\nIts ${linkedTaskCount} associated task${
+          linkedTaskCount === 1 ? '' : 's'
+        } will be unassigned to General (GEN).`
+      : `Delete "${subject.code} — ${subject.name}"?`;
+
+  if (!window.confirm(confirmMessage)) return;
+
+  try {
+    await deleteSubject(subject.id);
+    const [subjects, tasks] = await Promise.all([getAllSubjects(), getAllTasks()]);
+    state.subjects = subjects;
+    state.tasks = tasks;
+
+    if (state.subjectId === subject.id) {
+      state.subjectId = null;
+    }
+
+    // Update any schedule blocks that belonged to this subject's tasks
+    if (state.blocks.length > 0) {
+      const updatedBlocks = state.blocks.map((block) => {
+        if (block.subjectCode === subject.code) {
+          return { ...block, subjectCode: 'GEN', subjectName: 'General', tone: 'muted' };
+        }
+        return block;
+      });
+      await commitBlocks(reconcileBlocks(updatedBlocks, state.tasks));
+    }
+
+    renderSubjects();
+    renderSubjectsView();
+    renderFilters();
+    renderTaskList();
+    renderMetrics();
+
+    showToast(`Deleted "${subject.code} — ${subject.name}"`);
+  } catch (error) {
+    console.warn('StudyOS: could not delete subject.', error);
+    showToast('Could not delete that subject. Please try again.', { tone: 'error' });
+  }
 }
 
 /* ==========================================================================
@@ -579,6 +936,7 @@ async function toggleTask(id, checkbox = null) {
 
   renderMetrics();
   renderCounts();
+  renderSubjectsView();
 
   // Let the fade/strikethrough finish, then drop rows that no longer match the filter.
   if (row && !matchesFilters(updated)) {
@@ -617,6 +975,7 @@ async function removeTask(id) {
 
   renderMetrics();
   renderCounts();
+  renderSubjectsView();
   await syncBlocks();
 
   showToast(`Deleted "${task.title}"`, {
@@ -630,6 +989,7 @@ async function removeTask(id) {
         renderTaskList();
         renderMetrics();
         renderCounts();
+        renderSubjectsView();
         await commitBlocks(reconcileBlocks(restoredBlocks, state.tasks));
       } catch (error) {
         console.warn('StudyOS: could not restore task.', error);
@@ -657,6 +1017,7 @@ async function createTask(fields, { announce = true } = {}) {
   renderFilters();
   renderTaskList({ highlightId: saved.id });
   renderMetrics();
+  renderSubjectsView();
 
   if (announce) {
     const subject = getSubject(saved.subjectId);
@@ -821,6 +1182,15 @@ function setStorageStatus(ok) {
    ========================================================================== */
 
 function bindEvents() {
+  if (refs.sidebarNav) {
+    refs.sidebarNav.addEventListener('click', (event) => {
+      const navLink = event.target.closest('.nav-item[data-view]');
+      if (!navLink) return;
+      event.preventDefault();
+      switchView(navLink.dataset.view);
+    });
+  }
+
   refs.taskList.addEventListener('change', (event) => {
     const checkbox = event.target.closest('.task-check');
     if (!checkbox) return;
@@ -853,9 +1223,60 @@ function bindEvents() {
     if (button) setSubjectFilter(button.dataset.subjectId);
   });
 
+  if (refs.sidebarAddSubjectBtn) {
+    refs.sidebarAddSubjectBtn.addEventListener('click', () => openSubjectModal());
+  }
+
+  if (refs.newSubjectBtn) {
+    refs.newSubjectBtn.addEventListener('click', () => openSubjectModal());
+  }
+
+  if (refs.subjectsGrid) {
+    refs.subjectsGrid.addEventListener('click', (event) => {
+      const editBtn = event.target.closest('[data-action="edit-subject"]');
+      if (editBtn) {
+        const subject = getSubject(editBtn.dataset.subjectId);
+        if (subject) openSubjectModal(subject);
+        return;
+      }
+
+      const deleteBtn = event.target.closest('[data-action="delete-subject"]');
+      if (deleteBtn) {
+        handleDeleteSubject(deleteBtn.dataset.subjectId);
+        return;
+      }
+
+      const emptyNewBtn = event.target.closest('[data-action="new-subject-empty"]');
+      if (emptyNewBtn) {
+        openSubjectModal();
+      }
+    });
+  }
+
+  if (refs.subjectForm) {
+    refs.subjectForm.addEventListener('submit', handleSubjectFormSubmit);
+  }
+
+  if (refs.subjectCancelBtn) {
+    refs.subjectCancelBtn.addEventListener('click', closeSubjectModal);
+  }
+
+  if (refs.subjectModalClose) {
+    refs.subjectModalClose.addEventListener('click', closeSubjectModal);
+  }
+
+  if (refs.subjectModal) {
+    refs.subjectModal.addEventListener('click', (event) => {
+      if (event.target === refs.subjectModal) closeSubjectModal();
+    });
+  }
+
   refs.quickForm.addEventListener('submit', handleQuickAdd);
   refs.autoPlan.addEventListener('click', handleAutoPlan);
-  refs.newTaskButton.addEventListener('click', () => refs.quickInput.focus());
+  refs.newTaskButton.addEventListener('click', () => {
+    if (state.view !== 'dashboard') switchView('dashboard');
+    refs.quickInput.focus();
+  });
   refs.startFocusButton.addEventListener('click', () => requestFocusSession());
 
   document.addEventListener('keydown', (event) => {
@@ -863,6 +1284,7 @@ function bindEvents() {
       (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n';
     if (isNewTaskShortcut) {
       event.preventDefault();
+      if (state.view !== 'dashboard') switchView('dashboard');
       refs.quickInput.focus();
     }
   });
@@ -982,6 +1404,24 @@ function cacheElements() {
   const byId = (id) => document.getElementById(id);
 
   Object.assign(refs, {
+    sidebarNav: document.querySelector('.sidebar-nav'),
+    navItems: [...document.querySelectorAll('.sidebar-nav .nav-item[data-view]')],
+    dashboardView: byId('dashboard-content'),
+    subjectsView: byId('subjects-view'),
+    subjectsGrid: byId('subjects-grid'),
+    subjectsSummaryText: byId('subjects-summary-text'),
+    sidebarAddSubjectBtn: byId('sidebar-add-subject-btn'),
+    newSubjectBtn: byId('new-subject-btn'),
+    subjectModal: byId('subject-modal'),
+    subjectForm: byId('subject-form'),
+    subjectModalTitle: byId('subject-modal-title'),
+    subjectModalClose: byId('subject-modal-close'),
+    subjectCancelBtn: byId('subject-cancel-btn'),
+    subjectSaveBtn: byId('subject-save-btn'),
+    subjectIdInput: byId('subject-id-input'),
+    subjectCodeInput: byId('subject-code-input'),
+    subjectNameInput: byId('subject-name-input'),
+    subjectFormError: byId('subject-form-error'),
     greeting: byId('greeting-title'),
     dateDisplay: byId('current-date-display'),
     tasksDone: byId('metric-tasks-done'),
@@ -1027,16 +1467,22 @@ async function init() {
     setStorageStatus(true);
 
     renderSubjects();
+    renderSubjectsView();
     renderFilters();
     renderTaskList();
     renderMetrics();
     renderPlannedBlocks();
+
+    if (window.location.hash === '#subjects') {
+      switchView('subjects');
+    }
 
     await ensureTodaysPlan();
     resolveReady();
   } catch (error) {
     console.warn('StudyOS: IndexedDB is unavailable.', error);
     setStorageStatus(false);
+    renderSubjectsView();
     renderTaskList();
     renderPlannedBlocks();
     showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });
