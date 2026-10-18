@@ -16,12 +16,15 @@ import {
   SUBJECT_TONES,
   getAllTasks,
   addTask,
+  updateTask,
   toggleTaskCompletion,
   deleteTask,
   getAllSessions,
   getScheduleBlocks,
   saveScheduleBlocks,
   toDateKey,
+  normalizeDueDateString,
+  formatDueLabelFromDate,
 } from './core/db.js';
 import { generateSmartSchedule } from './modules/scheduler.js';
 
@@ -54,18 +57,27 @@ const ICON_CHECK =
 const ICON_CLOCK =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
 
+const ICON_EDIT =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+
 /* ==========================================================================
    State
    ========================================================================== */
 
 const state = {
-  view: 'dashboard', // 'dashboard' | 'subjects'
+  view: 'dashboard', // 'dashboard' | 'subjects' | 'tasks'
   subjects: [],
   tasks: [],
   sessions: [],
   blocks: [],
-  filter: 'all', // 'all' | 'pending' | 'completed'
+  filter: 'all', // 'all' | 'pending' | 'completed' (dashboard)
   subjectId: null, // sidebar subject filter
+  tasksFilter: {
+    search: '',
+    subjectId: 'all',
+    status: 'all', // 'all' | 'pending' | 'completed'
+    sort: 'smart', // 'smart' | 'deadline' | 'duration-desc' | 'duration-asc'
+  },
 };
 
 /** Cached DOM references, filled by cacheElements(). */
@@ -283,14 +295,29 @@ function renderSubjects() {
 }
 
 function renderSubjectSelection() {
+  const activeSubjectId =
+    state.view === 'tasks'
+      ? state.tasksFilter.subjectId !== 'all' && state.tasksFilter.subjectId !== 'none'
+        ? state.tasksFilter.subjectId
+        : null
+      : state.subjectId;
+
   refs.subjectList.querySelectorAll('.subject-item').forEach((button) => {
-    const selected = button.dataset.subjectId === state.subjectId;
+    const selected = button.dataset.subjectId === activeSubjectId;
     button.classList.toggle('is-selected', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
 }
 
 function setSubjectFilter(subjectId) {
+  if (state.view === 'tasks') {
+    state.tasksFilter.subjectId = state.tasksFilter.subjectId === subjectId ? 'all' : subjectId;
+    if (refs.tasksSubjectFilter) refs.tasksSubjectFilter.value = state.tasksFilter.subjectId;
+    renderSubjectSelection();
+    renderTasksView();
+    return;
+  }
+
   if (state.view !== 'dashboard') {
     state.subjectId = subjectId;
     switchView('dashboard');
@@ -307,14 +334,13 @@ function setSubjectFilter(subjectId) {
    ========================================================================== */
 
 const UPCOMING_VIEW_LABELS = Object.freeze({
-  tasks: 'Full Task Manager',
   calendar: 'Academic Calendar',
   focus: 'Focus Mode',
   analytics: 'Analytics',
 });
 
 function switchView(viewName) {
-  if (viewName !== 'dashboard' && viewName !== 'subjects') {
+  if (viewName !== 'dashboard' && viewName !== 'subjects' && viewName !== 'tasks') {
     const label = UPCOMING_VIEW_LABELS[viewName] ?? 'That module';
     showToast(`${label} is coming in a later phase.`);
     return;
@@ -324,6 +350,7 @@ function switchView(viewName) {
 
   if (refs.dashboardView) refs.dashboardView.hidden = viewName !== 'dashboard';
   if (refs.subjectsView) refs.subjectsView.hidden = viewName !== 'subjects';
+  if (refs.tasksView) refs.tasksView.hidden = viewName !== 'tasks';
 
   refs.navItems.forEach((link) => {
     const isActive = link.dataset.view === viewName;
@@ -335,8 +362,13 @@ function switchView(viewName) {
     }
   });
 
+  renderSubjectSelection();
+
   if (viewName === 'subjects') {
     renderSubjectsView();
+  } else if (viewName === 'tasks') {
+    populateSubjectSelects();
+    renderTasksView();
   }
 }
 
@@ -407,7 +439,7 @@ function createSubjectCardElement(subject) {
   track.append(fill);
   progressSection.append(progressMeta, track);
 
-  // Footer: total logged focus time from sessions + pending count
+  // Footer: total logged focus time from sessions + pending count + "+ Add Task" quick action
   const footer = createEl('footer', 'subject-card-footer');
   const focusStat = createEl('div', 'subject-focus-stat');
   focusStat.insertAdjacentHTML('beforeend', ICON_CLOCK);
@@ -416,6 +448,7 @@ function createSubjectCardElement(subject) {
   focusText.append(focusStrong, document.createTextNode(' focus logged'));
   focusStat.append(focusText);
 
+  const footerRight = createEl('div', 'subject-card-footer-right');
   const pendingPill = createEl(
     'span',
     'subject-pending-pill',
@@ -426,7 +459,14 @@ function createSubjectCardElement(subject) {
         : `${pendingTasks} pending`,
   );
 
-  footer.append(focusStat, pendingPill);
+  const addTaskBtn = createEl('button', 'btn-subject-add-task', '+ Add Task');
+  addTaskBtn.type = 'button';
+  addTaskBtn.dataset.action = 'add-subject-task';
+  addTaskBtn.dataset.subjectId = subject.id;
+  addTaskBtn.setAttribute('aria-label', `Add task to ${subject.code} ${subject.name}`);
+
+  footerRight.append(pendingPill, addTaskBtn);
+  footer.append(focusStat, footerRight);
 
   card.append(header, progressSection, footer);
   return card;
@@ -580,8 +620,10 @@ async function handleSubjectFormSubmit(event) {
     }
 
     renderSubjects();
+    populateSubjectSelects();
     renderSubjectsView();
     renderTaskList();
+    renderTasksView();
     renderMetrics();
     closeSubjectModal();
 
@@ -621,6 +663,9 @@ async function handleDeleteSubject(subjectId) {
     if (state.subjectId === subject.id) {
       state.subjectId = null;
     }
+    if (state.tasksFilter.subjectId === subject.id) {
+      state.tasksFilter.subjectId = 'all';
+    }
 
     // Update any schedule blocks that belonged to this subject's tasks
     if (state.blocks.length > 0) {
@@ -634,9 +679,11 @@ async function handleDeleteSubject(subjectId) {
     }
 
     renderSubjects();
+    populateSubjectSelects();
     renderSubjectsView();
     renderFilters();
     renderTaskList();
+    renderTasksView();
     renderMetrics();
 
     showToast(`Deleted "${subject.code} — ${subject.name}"`);
@@ -647,8 +694,10 @@ async function handleDeleteSubject(subjectId) {
 }
 
 /* ==========================================================================
-   Task list
+   Task list & Module 3: Full Task Management View (#tasks-view & #task-modal)
    ========================================================================== */
+
+const PRIORITY_WEIGHT = Object.freeze({ high: 3, medium: 2, low: 1 });
 
 function createFocusButton(task) {
   const button = createEl('button', 'btn-task-focus', 'Focus ▶');
@@ -657,7 +706,7 @@ function createFocusButton(task) {
   return button;
 }
 
-function createTaskElement(task, { isNew = false } = {}) {
+function createTaskElement(task, { isNew = false, listPrefix = 'dash' } = {}) {
   const subject = getSubject(task.subjectId);
   const priority = PRIORITY_META[task.priority] ?? PRIORITY_META.medium;
 
@@ -667,13 +716,13 @@ function createTaskElement(task, { isNew = false } = {}) {
 
   const checkbox = createEl('input', 'task-check');
   checkbox.type = 'checkbox';
-  checkbox.id = `task-check-${task.id}`;
+  checkbox.id = `task-check-${listPrefix}-${task.id}`;
   checkbox.checked = task.completed;
-  checkbox.setAttribute('aria-labelledby', `task-title-${task.id}`);
+  checkbox.setAttribute('aria-labelledby', `task-title-${listPrefix}-${task.id}`);
 
   const body = createEl('div', 'task-body');
   const title = createEl('h3', 'task-title', task.title);
-  title.id = `task-title-${task.id}`;
+  title.id = `task-title-${listPrefix}-${task.id}`;
 
   const meta = createEl('div', 'task-meta');
   meta.append(
@@ -683,15 +732,26 @@ function createTaskElement(task, { isNew = false } = {}) {
   );
   body.append(title, meta);
 
+  if (task.notes) {
+    body.append(createEl('p', 'task-notes', task.notes));
+  }
+
   const actions = createEl('div', 'task-actions');
   if (!task.completed) actions.append(createFocusButton(task));
 
   const badge = createEl('span', `priority-badge ${priority.badge}`, priority.label);
+
+  const editBtn = createEl('button', 'task-edit');
+  editBtn.type = 'button';
+  editBtn.title = 'Edit task';
+  editBtn.setAttribute('aria-label', `Edit task: ${task.title}`);
+  editBtn.insertAdjacentHTML('beforeend', ICON_EDIT);
+
   const remove = createEl('button', 'task-delete', '×');
   remove.type = 'button';
   remove.title = 'Delete task';
   remove.setAttribute('aria-label', `Delete task: ${task.title}`);
-  actions.append(badge, remove);
+  actions.append(badge, editBtn, remove);
 
   row.append(checkbox, body, actions);
   return row;
@@ -729,12 +789,13 @@ function createEmptyState() {
   return wrapper;
 }
 
-/** The first pending row keeps its "Focus ▶" button permanently visible. */
-function updatePinnedFocus() {
-  refs.taskList.querySelectorAll('.btn-task-focus--pinned').forEach((button) => {
+/** The first pending row in each task list keeps its "Focus ▶" button permanently visible. */
+function updatePinnedFocus(container = refs.taskList) {
+  if (!container) return;
+  container.querySelectorAll('.btn-task-focus--pinned').forEach((button) => {
     button.classList.remove('btn-task-focus--pinned');
   });
-  const firstPending = refs.taskList.querySelector('.task-item[data-status="pending"] .btn-task-focus');
+  const firstPending = container.querySelector('.task-item[data-status="pending"] .btn-task-focus');
   if (firstPending) firstPending.classList.add('btn-task-focus--pinned');
 }
 
@@ -751,9 +812,9 @@ function renderTaskList({ highlightId = null } = {}) {
   }
 
   refs.taskList.replaceChildren(
-    ...visible.map((task) => createTaskElement(task, { isNew: task.id === highlightId })),
+    ...visible.map((task) => createTaskElement(task, { isNew: task.id === highlightId, listPrefix: 'dash' })),
   );
-  updatePinnedFocus();
+  updatePinnedFocus(refs.taskList);
 }
 
 function renderFilters() {
@@ -778,11 +839,384 @@ function syncRow(row, task) {
   const focusButton = actions.querySelector('.btn-task-focus');
   if (task.completed && focusButton) focusButton.remove();
   if (!task.completed && !focusButton) actions.prepend(createFocusButton(task));
-  updatePinnedFocus();
+  updatePinnedFocus(row.parentElement);
 }
 
-function findRow(id) {
-  return refs.taskList.querySelector(`[data-task-id="${CSS.escape(id)}"]`);
+function findRows(id) {
+  const escaped = CSS.escape(id);
+  const rows = [];
+  if (refs.taskList) {
+    const dashRow = refs.taskList.querySelector(`[data-task-id="${escaped}"]`);
+    if (dashRow) rows.push(dashRow);
+  }
+  if (refs.fullTasksList) {
+    const fullRow = refs.fullTasksList.querySelector(`[data-task-id="${escaped}"]`);
+    if (fullRow) rows.push(fullRow);
+  }
+  return rows;
+}
+
+/* ==========================================================================
+   Module 3: Full Task Management View (#tasks-view) & Modal (#task-modal)
+   ========================================================================== */
+
+function populateSubjectSelects() {
+  if (refs.tasksSubjectFilter) {
+    const prevValue = state.tasksFilter.subjectId;
+    const filterOptions = [createEl('option', '', 'All Subjects')];
+    filterOptions[0].value = 'all';
+
+    for (const subject of state.subjects) {
+      const opt = createEl('option', '', `${subject.code} — ${subject.name}`);
+      opt.value = subject.id;
+      filterOptions.push(opt);
+    }
+
+    const genOpt = createEl('option', '', 'General (GEN)');
+    genOpt.value = 'none';
+    filterOptions.push(genOpt);
+
+    refs.tasksSubjectFilter.replaceChildren(...filterOptions);
+    const valid = filterOptions.some((opt) => opt.value === prevValue);
+    state.tasksFilter.subjectId = valid ? prevValue : 'all';
+    refs.tasksSubjectFilter.value = state.tasksFilter.subjectId;
+  }
+
+  if (refs.taskSubjectSelect) {
+    const currentVal = refs.taskSubjectSelect.value;
+    const modalOptions = [];
+    for (const subject of state.subjects) {
+      const opt = createEl('option', '', `${subject.code} — ${subject.name}`);
+      opt.value = subject.id;
+      modalOptions.push(opt);
+    }
+    const genOpt = createEl('option', '', 'General (GEN)');
+    genOpt.value = '';
+    modalOptions.push(genOpt);
+
+    refs.taskSubjectSelect.replaceChildren(...modalOptions);
+    if (modalOptions.some((opt) => opt.value === currentVal)) {
+      refs.taskSubjectSelect.value = currentVal;
+    }
+  }
+}
+
+function matchesTasksViewSearchAndSubject(task) {
+  const { search, subjectId } = state.tasksFilter;
+
+  if (subjectId === 'none') {
+    if (task.subjectId) return false;
+  } else if (subjectId !== 'all') {
+    if (task.subjectId !== subjectId) return false;
+  }
+
+  if (search) {
+    const q = search.toLowerCase();
+    const subject = getSubject(task.subjectId);
+    const haystack = [
+      task.title,
+      task.notes ?? '',
+      task.dueLabel ?? '',
+      subject ? subject.code : 'GEN',
+      subject ? subject.name : 'General',
+    ]
+      .join(' ')
+      .toLowerCase();
+    if (!haystack.includes(q)) return false;
+  }
+
+  return true;
+}
+
+function matchesTasksViewAll(task) {
+  if (!matchesTasksViewSearchAndSubject(task)) return false;
+  if (state.tasksFilter.status === 'pending') return !task.completed;
+  if (state.tasksFilter.status === 'completed') return task.completed;
+  return true;
+}
+
+function compareTasksForView(a, b) {
+  const sortMode = state.tasksFilter.sort;
+
+  if (sortMode === 'duration-desc') {
+    return (
+      (Number(b.durationMinutes) || 0) - (Number(a.durationMinutes) || 0) ||
+      (PRIORITY_WEIGHT[b.priority] ?? 2) - (PRIORITY_WEIGHT[a.priority] ?? 2) ||
+      String(b.createdAt).localeCompare(String(a.createdAt))
+    );
+  }
+
+  if (sortMode === 'duration-asc') {
+    return (
+      (Number(a.durationMinutes) || 0) - (Number(b.durationMinutes) || 0) ||
+      (PRIORITY_WEIGHT[b.priority] ?? 2) - (PRIORITY_WEIGHT[a.priority] ?? 2) ||
+      String(b.createdAt).localeCompare(String(a.createdAt))
+    );
+  }
+
+  if (sortMode === 'deadline') {
+    // Pending tasks first, then soonest dueDate, then highest priority
+    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    return (
+      String(a.dueDate ?? '').localeCompare(String(b.dueDate ?? '')) ||
+      (PRIORITY_WEIGHT[b.priority] ?? 2) - (PRIORITY_WEIGHT[a.priority] ?? 2) ||
+      String(b.createdAt).localeCompare(String(a.createdAt))
+    );
+  }
+
+  // Default 'smart': Pending first, then Priority (high > medium > low), then soonest dueDate, then newest
+  if (a.completed !== b.completed) return a.completed ? 1 : -1;
+  return (
+    (PRIORITY_WEIGHT[b.priority] ?? 2) - (PRIORITY_WEIGHT[a.priority] ?? 2) ||
+    String(a.dueDate ?? '').localeCompare(String(b.dueDate ?? '')) ||
+    String(b.createdAt).localeCompare(String(a.createdAt)) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function createTasksViewEmptyState() {
+  const wrapper = createEl('div', 'empty-state');
+  const hasActiveFilters =
+    Boolean(state.tasksFilter.search) ||
+    state.tasksFilter.subjectId !== 'all' ||
+    state.tasksFilter.status !== 'all';
+
+  if (hasActiveFilters) {
+    wrapper.append(
+      createEl('p', 'empty-state-title', 'No tasks match your filters'),
+      createEl('p', 'empty-state-hint', 'Try adjusting your search query, subject filter, or status tab.'),
+    );
+    const resetBtn = createEl('button', 'btn-ghost', 'Reset filters');
+    resetBtn.type = 'button';
+    resetBtn.dataset.action = 'reset-tasks-filters';
+    wrapper.append(resetBtn);
+  } else {
+    wrapper.append(
+      createEl('p', 'empty-state-title', 'No tasks in your workspace yet'),
+      createEl('p', 'empty-state-hint', 'Create your first task with a course tag, priority, due date, and notes.'),
+    );
+    const newBtn = createEl('button', 'btn-primary', '+ New Task');
+    newBtn.type = 'button';
+    newBtn.dataset.action = 'open-new-task-modal';
+    wrapper.append(newBtn);
+  }
+  return wrapper;
+}
+
+function renderTasksView({ highlightId = null } = {}) {
+  if (!refs.fullTasksList) return;
+
+  const total = state.tasks.length;
+  const doneTotal = state.tasks.filter((task) => task.completed).length;
+  const pendingTotal = total - doneTotal;
+
+  if (refs.tasksSummaryCounter) {
+    refs.tasksSummaryCounter.textContent = `${pendingTotal} pending • ${doneTotal} completed`;
+  }
+
+  const scoped = state.tasks.filter(matchesTasksViewSearchAndSubject);
+  const scopedDone = scoped.filter((task) => task.completed).length;
+  const counts = {
+    all: scoped.length,
+    pending: scoped.length - scopedDone,
+    completed: scopedDone,
+  };
+
+  if (refs.tasksStatusButtons) {
+    refs.tasksStatusButtons.forEach((button) => {
+      const status = button.dataset.tasksStatus;
+      const isActive = status === state.tasksFilter.status;
+      button.classList.toggle('active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+      const countEl = button.querySelector('.count');
+      if (countEl) countEl.textContent = String(counts[status] ?? 0);
+    });
+  }
+
+  const visible = scoped
+    .filter((task) => {
+      if (state.tasksFilter.status === 'pending') return !task.completed;
+      if (state.tasksFilter.status === 'completed') return task.completed;
+      return true;
+    })
+    .sort(compareTasksForView);
+
+  if (visible.length === 0) {
+    refs.fullTasksList.replaceChildren(createTasksViewEmptyState());
+    return;
+  }
+
+  refs.fullTasksList.replaceChildren(
+    ...visible.map((task) => createTaskElement(task, { isNew: task.id === highlightId, listPrefix: 'full' })),
+  );
+  updatePinnedFocus(refs.fullTasksList);
+}
+
+function showTaskFormError(message) {
+  if (!refs.taskFormError) return;
+  if (!message) {
+    refs.taskFormError.textContent = '';
+    refs.taskFormError.hidden = true;
+  } else {
+    refs.taskFormError.textContent = message;
+    refs.taskFormError.hidden = false;
+  }
+}
+
+function openTaskModal({ task = null, defaultSubjectId: presetSubjectId = null } = {}) {
+  if (!refs.taskModal || !refs.taskForm) return;
+
+  populateSubjectSelects();
+
+  const isEdit = Boolean(task && task.id);
+  refs.taskModalTitle.textContent = isEdit ? 'Edit Task' : 'New Task';
+  refs.taskSaveBtn.textContent = isEdit ? 'Save Changes' : 'Save Task';
+
+  refs.taskIdInput.value = isEdit ? task.id : '';
+  refs.taskTitleInput.value = isEdit ? task.title : '';
+
+  const fallbackSubjId =
+    presetSubjectId ??
+    (state.view === 'tasks' && state.tasksFilter.subjectId !== 'all' && state.tasksFilter.subjectId !== 'none'
+      ? state.tasksFilter.subjectId
+      : defaultSubjectId()) ??
+    '';
+
+  refs.taskSubjectSelect.value = isEdit ? task.subjectId ?? '' : fallbackSubjId;
+  refs.taskDurationInput.value = String(
+    isEdit ? task.durationMinutes ?? CONFIG.defaultDurationMinutes : CONFIG.defaultDurationMinutes,
+  );
+
+  const selectedPriority = isEdit && PRIORITY_META[task.priority] ? task.priority : CONFIG.defaultPriority;
+  const priorityRadio = refs.taskForm.querySelector(`input[name="priority"][value="${selectedPriority}"]`);
+  if (priorityRadio) priorityRadio.checked = true;
+
+  const dueDateVal = isEdit ? normalizeDueDateString(task.dueDate) : toDateKey(new Date());
+  refs.taskDueDateInput.value = dueDateVal;
+
+  const autoDueLabel = formatDueLabelFromDate(dueDateVal);
+  refs.taskDueLabelInput.placeholder = `e.g., ${autoDueLabel}`;
+  refs.taskDueLabelInput.value =
+    isEdit && task.dueLabel && task.dueLabel !== autoDueLabel ? task.dueLabel : '';
+
+  refs.taskNotesInput.value = isEdit ? task.notes ?? '' : '';
+
+  showTaskFormError('');
+
+  if (typeof refs.taskModal.showModal === 'function') {
+    if (!refs.taskModal.open) refs.taskModal.showModal();
+  } else {
+    refs.taskModal.setAttribute('open', '');
+  }
+
+  refs.taskTitleInput.focus();
+  if (isEdit) refs.taskTitleInput.select();
+}
+
+function closeTaskModal() {
+  if (!refs.taskModal) return;
+  showTaskFormError('');
+  if (typeof refs.taskModal.close === 'function' && refs.taskModal.open) {
+    refs.taskModal.close();
+  } else {
+    refs.taskModal.removeAttribute('open');
+  }
+}
+
+async function handleTaskFormSubmit(event) {
+  event.preventDefault();
+
+  const editingId = refs.taskIdInput.value.trim();
+  const title = refs.taskTitleInput.value.trim();
+  const subjectId = refs.taskSubjectSelect.value || null;
+  const rawDuration = Number(refs.taskDurationInput.value);
+  const checkedPriority = refs.taskForm.querySelector('input[name="priority"]:checked');
+  const priority = checkedPriority && PRIORITY_META[checkedPriority.value] ? checkedPriority.value : 'medium';
+  const dueDate = normalizeDueDateString(refs.taskDueDateInput.value || toDateKey(new Date()));
+  const customDueLabel = refs.taskDueLabelInput.value.trim();
+  const dueLabel = customDueLabel || formatDueLabelFromDate(dueDate);
+  const notes = refs.taskNotesInput.value.trim();
+
+  if (!title) {
+    showTaskFormError('Please enter a task title.');
+    refs.taskTitleInput.focus();
+    return;
+  }
+
+  if (!Number.isFinite(rawDuration) || rawDuration < CONFIG.minDurationMinutes) {
+    showTaskFormError(`Estimated duration must be at least ${CONFIG.minDurationMinutes} minutes.`);
+    refs.taskDurationInput.focus();
+    return;
+  }
+
+  const durationMinutes = clampDuration(rawDuration);
+
+  refs.taskSaveBtn.disabled = true;
+  try {
+    if (editingId) {
+      const saved = await updateTask({
+        id: editingId,
+        title,
+        subjectId,
+        priority,
+        durationMinutes,
+        dueDate,
+        dueLabel,
+        notes,
+      });
+
+      const index = state.tasks.findIndex((item) => item.id === editingId);
+      if (index !== -1) state.tasks[index] = saved;
+
+      // Keep any linked Smart Schedule blocks synchronized with the edited task.
+      if (state.blocks.length > 0) {
+        const subject = getSubject(saved.subjectId);
+        let blocksChanged = false;
+        const updatedBlocks = state.blocks.map((block) => {
+          if (block.taskId === saved.id) {
+            blocksChanged = true;
+            const partSuffix = block.title.match(/(\s*\(\d+\/\d+\))$/)?.[1] ?? '';
+            return {
+              ...block,
+              title: `${saved.title}${partSuffix}`,
+              subjectId: saved.subjectId,
+              subjectCode: subject ? subject.code : 'GEN',
+              subjectName: subject ? subject.name : 'General',
+              tone: subject ? subject.tone : 'muted',
+            };
+          }
+          return block;
+        });
+        if (blocksChanged) await commitBlocks(updatedBlocks);
+      }
+
+      renderFilters();
+      renderTaskList({ highlightId: saved.id });
+      renderTasksView({ highlightId: saved.id });
+      renderSubjectsView();
+      renderMetrics();
+      closeTaskModal();
+
+      const subject = getSubject(saved.subjectId);
+      showToast(`Updated "${saved.title}" · ${subject ? subject.code : 'GEN'}`);
+    } else {
+      await createTask({
+        title,
+        subjectId,
+        priority,
+        durationMinutes,
+        dueDate,
+        dueLabel,
+        notes,
+      });
+      closeTaskModal();
+    }
+  } catch (error) {
+    console.warn('StudyOS: could not save task.', error);
+    showTaskFormError('Could not save that task. Please try again.');
+  } finally {
+    refs.taskSaveBtn.disabled = false;
+  }
 }
 
 /* ==========================================================================
@@ -931,18 +1365,19 @@ async function toggleTask(id, checkbox = null) {
   const index = state.tasks.findIndex((task) => task.id === id);
   if (index !== -1) state.tasks[index] = updated;
 
-  const row = findRow(id);
-  if (row) syncRow(row, updated);
+  const rows = findRows(id);
+  rows.forEach((row) => syncRow(row, updated));
 
   renderMetrics();
   renderCounts();
   renderSubjectsView();
 
-  // Let the fade/strikethrough finish, then drop rows that no longer match the filter.
-  if (row && !matchesFilters(updated)) {
-    clearTimeout(listRefreshTimer);
-    listRefreshTimer = setTimeout(renderTaskList, CONFIG.listRefreshDelayMs);
-  }
+  // Let the fade/strikethrough finish, then refresh lists where filtering or sorting changes.
+  clearTimeout(listRefreshTimer);
+  listRefreshTimer = setTimeout(() => {
+    renderTaskList();
+    renderTasksView();
+  }, CONFIG.listRefreshDelayMs);
 
   await syncBlocks();
   return updated;
@@ -964,13 +1399,17 @@ async function removeTask(id) {
 
   state.tasks = state.tasks.filter((candidate) => candidate.id !== id);
 
-  const row = findRow(id);
-  if (row) {
-    row.classList.add('is-removing');
+  const rows = findRows(id);
+  if (rows.length > 0) {
+    rows.forEach((row) => row.classList.add('is-removing'));
     clearTimeout(listRefreshTimer);
-    listRefreshTimer = setTimeout(renderTaskList, 220);
+    listRefreshTimer = setTimeout(() => {
+      renderTaskList();
+      renderTasksView();
+    }, 220);
   } else {
     renderTaskList();
+    renderTasksView();
   }
 
   renderMetrics();
@@ -987,6 +1426,7 @@ async function removeTask(id) {
         state.tasks.push(restored);
         const restoredBlocks = [...state.blocks, ...orphanedBlocks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         renderTaskList();
+        renderTasksView();
         renderMetrics();
         renderCounts();
         renderSubjectsView();
@@ -1007,17 +1447,31 @@ async function createTask(fields, { announce = true } = {}) {
     subjectId: fields.subjectId,
     priority: fields.priority,
     durationMinutes: fields.durationMinutes,
+    dueDate: fields.dueDate,
+    dueLabel: fields.dueLabel,
+    notes: fields.notes,
   });
   state.tasks.push(saved);
 
   // A brand-new task is pending: reset any filter that would hide it.
   if (state.filter === 'completed') state.filter = 'all';
   if (state.subjectId && state.subjectId !== saved.subjectId) state.subjectId = null;
+  if (state.tasksFilter.status === 'completed') state.tasksFilter.status = 'all';
+  if (
+    state.tasksFilter.subjectId !== 'all' &&
+    ((state.tasksFilter.subjectId === 'none' && saved.subjectId) ||
+      (state.tasksFilter.subjectId !== 'none' && state.tasksFilter.subjectId !== saved.subjectId))
+  ) {
+    state.tasksFilter.subjectId = 'all';
+    if (refs.tasksSubjectFilter) refs.tasksSubjectFilter.value = 'all';
+  }
 
   renderFilters();
   renderTaskList({ highlightId: saved.id });
+  renderTasksView({ highlightId: saved.id });
   renderMetrics();
   renderSubjectsView();
+  await syncBlocks();
 
   if (announce) {
     const subject = getSubject(saved.subjectId);
@@ -1181,6 +1635,41 @@ function setStorageStatus(ok) {
    Events
    ========================================================================== */
 
+function handleTaskListClick(event) {
+  const row = event.target.closest('.task-item');
+
+  if (event.target.closest('.task-delete') && row) {
+    removeTask(row.dataset.taskId);
+  } else if (event.target.closest('.task-edit') && row) {
+    const task = state.tasks.find((item) => item.id === row.dataset.taskId);
+    if (task) openTaskModal({ task });
+  } else if (event.target.closest('.btn-task-focus') && row) {
+    requestFocusSession(state.tasks.find((task) => task.id === row.dataset.taskId) ?? null);
+  } else if (event.target.closest('[data-action="clear-subject"]')) {
+    state.subjectId = null;
+    renderSubjectSelection();
+    renderCounts();
+    renderTaskList();
+  } else if (event.target.closest('[data-action="reset-tasks-filters"]')) {
+    state.tasksFilter.search = '';
+    state.tasksFilter.subjectId = 'all';
+    state.tasksFilter.status = 'all';
+    if (refs.tasksSearchInput) refs.tasksSearchInput.value = '';
+    if (refs.tasksSubjectFilter) refs.tasksSubjectFilter.value = 'all';
+    renderSubjectSelection();
+    renderTasksView();
+  } else if (event.target.closest('[data-action="open-new-task-modal"]')) {
+    openTaskModal();
+  }
+}
+
+function handleTaskListChange(event) {
+  const checkbox = event.target.closest('.task-check');
+  if (!checkbox) return;
+  const row = checkbox.closest('.task-item');
+  if (row) toggleTask(row.dataset.taskId, checkbox);
+}
+
 function bindEvents() {
   if (refs.sidebarNav) {
     refs.sidebarNav.addEventListener('click', (event) => {
@@ -1191,32 +1680,49 @@ function bindEvents() {
     });
   }
 
-  refs.taskList.addEventListener('change', (event) => {
-    const checkbox = event.target.closest('.task-check');
-    if (!checkbox) return;
-    const row = checkbox.closest('.task-item');
-    if (row) toggleTask(row.dataset.taskId, checkbox);
-  });
+  refs.taskList.addEventListener('change', handleTaskListChange);
+  refs.taskList.addEventListener('click', handleTaskListClick);
 
-  refs.taskList.addEventListener('click', (event) => {
-    const row = event.target.closest('.task-item');
-
-    if (event.target.closest('.task-delete') && row) {
-      removeTask(row.dataset.taskId);
-    } else if (event.target.closest('.btn-task-focus') && row) {
-      requestFocusSession(state.tasks.find((task) => task.id === row.dataset.taskId) ?? null);
-    } else if (event.target.closest('[data-action="clear-subject"]')) {
-      state.subjectId = null;
-      renderSubjectSelection();
-      renderCounts();
-      renderTaskList();
-    }
-  });
+  if (refs.fullTasksList) {
+    refs.fullTasksList.addEventListener('change', handleTaskListChange);
+    refs.fullTasksList.addEventListener('click', handleTaskListClick);
+  }
 
   refs.filterGroup.addEventListener('click', (event) => {
     const button = event.target.closest('.segmented-btn');
     if (button) setFilter(button.dataset.filter);
   });
+
+  if (refs.tasksSearchInput) {
+    refs.tasksSearchInput.addEventListener('input', () => {
+      state.tasksFilter.search = refs.tasksSearchInput.value.trim();
+      renderTasksView();
+    });
+  }
+
+  if (refs.tasksSubjectFilter) {
+    refs.tasksSubjectFilter.addEventListener('change', () => {
+      state.tasksFilter.subjectId = refs.tasksSubjectFilter.value;
+      renderSubjectSelection();
+      renderTasksView();
+    });
+  }
+
+  if (refs.tasksStatusGroup) {
+    refs.tasksStatusGroup.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-tasks-status]');
+      if (!button) return;
+      state.tasksFilter.status = button.dataset.tasksStatus;
+      renderTasksView();
+    });
+  }
+
+  if (refs.tasksSortSelect) {
+    refs.tasksSortSelect.addEventListener('change', () => {
+      state.tasksFilter.sort = refs.tasksSortSelect.value;
+      renderTasksView();
+    });
+  }
 
   refs.subjectList.addEventListener('click', (event) => {
     const button = event.target.closest('.subject-item');
@@ -1246,6 +1752,12 @@ function bindEvents() {
         return;
       }
 
+      const addTaskBtn = event.target.closest('[data-action="add-subject-task"]');
+      if (addTaskBtn) {
+        openTaskModal({ defaultSubjectId: addTaskBtn.dataset.subjectId });
+        return;
+      }
+
       const emptyNewBtn = event.target.closest('[data-action="new-subject-empty"]');
       if (emptyNewBtn) {
         openSubjectModal();
@@ -1271,21 +1783,60 @@ function bindEvents() {
     });
   }
 
+  if (refs.taskForm) {
+    refs.taskForm.addEventListener('submit', handleTaskFormSubmit);
+  }
+
+  if (refs.taskDueDateInput && refs.taskDueLabelInput) {
+    refs.taskDueDateInput.addEventListener('change', () => {
+      const autoLabel = formatDueLabelFromDate(refs.taskDueDateInput.value);
+      refs.taskDueLabelInput.placeholder = `e.g., ${autoLabel}`;
+    });
+  }
+
+  if (refs.taskCancelBtn) {
+    refs.taskCancelBtn.addEventListener('click', closeTaskModal);
+  }
+
+  if (refs.taskModalClose) {
+    refs.taskModalClose.addEventListener('click', closeTaskModal);
+  }
+
+  if (refs.taskModal) {
+    refs.taskModal.addEventListener('click', (event) => {
+      if (event.target === refs.taskModal) closeTaskModal();
+    });
+  }
+
   refs.quickForm.addEventListener('submit', handleQuickAdd);
   refs.autoPlan.addEventListener('click', handleAutoPlan);
-  refs.newTaskButton.addEventListener('click', () => {
-    if (state.view !== 'dashboard') switchView('dashboard');
-    refs.quickInput.focus();
-  });
+  refs.newTaskButton.addEventListener('click', () => openTaskModal());
+  if (refs.tasksNewTaskBtn) {
+    refs.tasksNewTaskBtn.addEventListener('click', () => openTaskModal());
+  }
   refs.startFocusButton.addEventListener('click', () => requestFocusSession());
 
   document.addEventListener('keydown', (event) => {
-    const isNewTaskShortcut =
+    const isOptN = event.altKey && !event.metaKey && !event.ctrlKey && event.code === 'KeyN';
+    const isCmdOrCtrlN =
       (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n';
-    if (isNewTaskShortcut) {
+
+    const target = event.target;
+    const isEditableTarget =
+      target instanceof HTMLElement &&
+      (target.matches('input, textarea, select, [contenteditable="true"]') ||
+        Boolean(target.closest('dialog[open]')));
+    const isPlainN =
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'n' &&
+      !isEditableTarget;
+
+    if (isOptN || isCmdOrCtrlN || isPlainN) {
       event.preventDefault();
-      if (state.view !== 'dashboard') switchView('dashboard');
-      refs.quickInput.focus();
+      openTaskModal();
     }
   });
 }
@@ -1303,7 +1854,9 @@ function summarizeTask(task) {
     subjectCode: subject ? subject.code : null,
     priority: task.priority,
     durationMinutes: task.durationMinutes,
+    dueDate: task.dueDate,
     dueLabel: task.dueLabel,
+    notes: task.notes ?? '',
     completed: task.completed,
   };
 }
@@ -1353,7 +1906,7 @@ const api = {
 
   /**
    * Adds a task. `input` is either a shorthand string ("CS-301 Revise !high 60m")
-   * or an object { title, subjectId | subjectCode, priority, durationMinutes }.
+   * or an object { title, subjectId | subjectCode, priority, durationMinutes, dueDate, dueLabel, notes }.
    */
   async addTaskFromExternal(input) {
     await ready;
@@ -1370,6 +1923,9 @@ const api = {
         durationMinutes: Number.isFinite(durationValue) && durationValue > 0
           ? clampDuration(durationValue)
           : CONFIG.defaultDurationMinutes,
+        dueDate: input.dueDate,
+        dueLabel: input.dueLabel,
+        notes: input.notes,
       };
     } else {
       throw new TypeError('addTaskFromExternal expects a string or an object.');
@@ -1422,6 +1978,29 @@ function cacheElements() {
     subjectCodeInput: byId('subject-code-input'),
     subjectNameInput: byId('subject-name-input'),
     subjectFormError: byId('subject-form-error'),
+    tasksView: byId('tasks-view'),
+    tasksSummaryCounter: byId('tasks-summary-counter'),
+    tasksNewTaskBtn: byId('tasks-new-task-btn'),
+    tasksSearchInput: byId('tasks-search-input'),
+    tasksSubjectFilter: byId('tasks-subject-filter'),
+    tasksStatusGroup: byId('tasks-status-group'),
+    tasksStatusButtons: [...document.querySelectorAll('[data-tasks-status]')],
+    tasksSortSelect: byId('tasks-sort-select'),
+    fullTasksList: byId('full-tasks-list'),
+    taskModal: byId('task-modal'),
+    taskForm: byId('task-form'),
+    taskModalTitle: byId('task-modal-title'),
+    taskModalClose: byId('task-modal-close'),
+    taskCancelBtn: byId('task-cancel-btn'),
+    taskSaveBtn: byId('task-save-btn'),
+    taskIdInput: byId('task-id-input'),
+    taskTitleInput: byId('task-title-input'),
+    taskSubjectSelect: byId('task-subject-select'),
+    taskDurationInput: byId('task-duration-input'),
+    taskDueDateInput: byId('task-duedate-input'),
+    taskDueLabelInput: byId('task-duelabel-input'),
+    taskNotesInput: byId('task-notes-input'),
+    taskFormError: byId('task-form-error'),
     greeting: byId('greeting-title'),
     dateDisplay: byId('current-date-display'),
     tasksDone: byId('metric-tasks-done'),
@@ -1467,14 +2046,18 @@ async function init() {
     setStorageStatus(true);
 
     renderSubjects();
+    populateSubjectSelects();
     renderSubjectsView();
     renderFilters();
     renderTaskList();
+    renderTasksView();
     renderMetrics();
     renderPlannedBlocks();
 
     if (window.location.hash === '#subjects') {
       switchView('subjects');
+    } else if (window.location.hash === '#tasks') {
+      switchView('tasks');
     }
 
     await ensureTodaysPlan();
@@ -1482,8 +2065,10 @@ async function init() {
   } catch (error) {
     console.warn('StudyOS: IndexedDB is unavailable.', error);
     setStorageStatus(false);
+    populateSubjectSelects();
     renderSubjectsView();
     renderTaskList();
+    renderTasksView();
     renderPlannedBlocks();
     showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });
     rejectReady(error);

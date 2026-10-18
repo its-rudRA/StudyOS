@@ -77,7 +77,10 @@ function splitDuration(total) {
 
 /** Returns { bonus, label } describing how close a task's deadline is. */
 function deadlineUrgency(task, now) {
-  const due = task.dueDate ? new Date(task.dueDate).getTime() : NaN;
+  const raw = task.dueDate ? String(task.dueDate).trim() : '';
+  const due = raw
+    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T23:59:00` : raw).getTime()
+    : NaN;
   if (Number.isNaN(due)) return { bonus: 0, label: null };
 
   const hoursLeft = (due - now.getTime()) / 3_600_000;

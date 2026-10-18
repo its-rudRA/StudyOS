@@ -397,6 +397,76 @@
           <div class="subjects-grid" id="subjects-grid" role="list"></div>
         </section>
 
+        <!-- ===================== Module 3: Full Task Management View ===================== -->
+        <section id="tasks-view" class="tasks-view" hidden aria-labelledby="tasks-view-title">
+          <div class="tasks-view-header">
+            <div class="tasks-view-header-info">
+              <div class="tasks-view-title-row">
+                <h2 id="tasks-view-title" class="tasks-view-title">All Tasks &amp; Assignments</h2>
+                <span class="tasks-summary-pill" id="tasks-summary-counter">2 pending • 4 completed</span>
+              </div>
+              <p class="tasks-view-subtitle">
+                Search, filter, sort, and manage all your coursework deliverables and study notes in one place.
+              </p>
+            </div>
+            <button type="button" class="btn-primary" id="tasks-new-task-btn">
+              <span aria-hidden="true">+</span>
+              <span>New Task</span>
+            </button>
+          </div>
+
+          <section class="panel tasks-manager-panel" aria-label="Task controls and list">
+            <div class="tasks-control-toolbar">
+              <div class="tasks-search-box">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                </svg>
+                <input
+                  type="search"
+                  id="tasks-search-input"
+                  class="tasks-search-input"
+                  placeholder="Search tasks, course codes, or notes..."
+                  aria-label="Search tasks, course codes, or notes"
+                  autocomplete="off"
+                />
+              </div>
+
+              <div class="tasks-toolbar-filters">
+                <div class="select-field">
+                  <label for="tasks-subject-filter" class="visually-hidden">Filter by subject</label>
+                  <select id="tasks-subject-filter" class="toolbar-select" aria-label="Filter by subject">
+                    <option value="all">All Subjects</option>
+                  </select>
+                </div>
+
+                <div class="segmented" id="tasks-status-group" role="group" aria-label="Filter tasks by status">
+                  <button type="button" class="segmented-btn active" data-tasks-status="all" aria-pressed="true">
+                    All <span class="count" id="tasks-count-all">6</span>
+                  </button>
+                  <button type="button" class="segmented-btn" data-tasks-status="pending" aria-pressed="false">
+                    Pending <span class="count" id="tasks-count-pending">2</span>
+                  </button>
+                  <button type="button" class="segmented-btn" data-tasks-status="completed" aria-pressed="false">
+                    Completed <span class="count" id="tasks-count-completed">4</span>
+                  </button>
+                </div>
+
+                <div class="select-field">
+                  <label for="tasks-sort-select" class="visually-hidden">Sort tasks</label>
+                  <select id="tasks-sort-select" class="toolbar-select" aria-label="Sort tasks">
+                    <option value="smart">Smart Priority</option>
+                    <option value="deadline">Deadline (Soonest)</option>
+                    <option value="duration-desc">Duration (High to Low)</option>
+                    <option value="duration-asc">Duration (Low to High)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="task-list full-tasks-list" id="full-tasks-list"></div>
+          </section>
+        </section>
+
       </div>
     </div>
 
@@ -484,6 +554,122 @@
       <footer class="modal-footer">
         <button type="button" class="btn-secondary" id="subject-cancel-btn">Cancel</button>
         <button type="submit" class="btn-primary" id="subject-save-btn">Save Subject</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ===================== Create / Edit Task Modal ===================== -->
+  <dialog id="task-modal" class="task-modal" aria-labelledby="task-modal-title">
+    <form id="task-form" class="modal-form" method="dialog" novalidate>
+      <header class="modal-header">
+        <h2 id="task-modal-title" class="modal-title">New Task</h2>
+        <button type="button" class="modal-close" id="task-modal-close" aria-label="Close modal">×</button>
+      </header>
+
+      <div class="modal-body">
+        <input type="hidden" id="task-id-input" name="id" />
+
+        <div class="form-field">
+          <label for="task-title-input" class="form-label">Task Title</label>
+          <input
+            type="text"
+            id="task-title-input"
+            name="title"
+            class="form-input"
+            placeholder="e.g., Finish dynamic programming problem set (Q4–Q7)"
+            maxlength="140"
+            autocomplete="off"
+            required
+          />
+        </div>
+
+        <div class="form-row-2col">
+          <div class="form-field">
+            <label for="task-subject-select" class="form-label">Subject / Course</label>
+            <select id="task-subject-select" name="subjectId" class="form-input form-select">
+              <option value="">General (GEN)</option>
+            </select>
+          </div>
+
+          <div class="form-field">
+            <label for="task-duration-input" class="form-label">Estimated Duration (min)</label>
+            <input
+              type="number"
+              id="task-duration-input"
+              name="durationMinutes"
+              class="form-input form-input--mono"
+              min="5"
+              max="600"
+              step="5"
+              value="45"
+              required
+            />
+          </div>
+        </div>
+
+        <fieldset class="form-field form-fieldset">
+          <legend class="form-label">Priority</legend>
+          <div class="priority-picker" role="radiogroup" aria-label="Task priority">
+            <label class="priority-option priority-option--high">
+              <input type="radio" name="priority" value="high" />
+              <span class="priority-dot" aria-hidden="true"></span>
+              <span>High</span>
+            </label>
+            <label class="priority-option priority-option--medium">
+              <input type="radio" name="priority" value="medium" checked />
+              <span class="priority-dot" aria-hidden="true"></span>
+              <span>Medium</span>
+            </label>
+            <label class="priority-option priority-option--low">
+              <input type="radio" name="priority" value="low" />
+              <span class="priority-dot" aria-hidden="true"></span>
+              <span>Low</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="form-row-2col">
+          <div class="form-field">
+            <label for="task-duedate-input" class="form-label">Due Date</label>
+            <input
+              type="date"
+              id="task-duedate-input"
+              name="dueDate"
+              class="form-input form-input--mono"
+            />
+          </div>
+
+          <div class="form-field">
+            <label for="task-duelabel-input" class="form-label">Due Label <span class="form-label-optional">(optional)</span></label>
+            <input
+              type="text"
+              id="task-duelabel-input"
+              name="dueLabel"
+              class="form-input"
+              placeholder="e.g., Due 11:59 PM"
+              maxlength="40"
+              autocomplete="off"
+            />
+          </div>
+        </div>
+
+        <div class="form-field">
+          <label for="task-notes-input" class="form-label">Study Notes</label>
+          <textarea
+            id="task-notes-input"
+            name="notes"
+            class="form-textarea"
+            rows="3"
+            placeholder="Add chapter references, requirements, or links..."
+          ></textarea>
+        </div>
+
+        <p id="task-form-error" class="form-error" role="alert" hidden></p>
+      </div>
+
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" id="task-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" id="task-save-btn">Save Task</button>
       </footer>
     </form>
   </dialog>

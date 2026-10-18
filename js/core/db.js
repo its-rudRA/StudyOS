@@ -103,19 +103,46 @@ function normalizeSubject(input) {
   };
 }
 
+export function normalizeDueDateString(rawDueDate, fallbackDate = new Date()) {
+  if (!rawDueDate) return toDateKey(fallbackDate);
+  const value = String(rawDueDate).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? toDateKey(fallbackDate) : toDateKey(parsed);
+}
+
+export function formatDueLabelFromDate(dueDateStr, now = new Date()) {
+  const normalized = normalizeDueDateString(dueDateStr, now);
+  const todayKey = toDateKey(now);
+  if (normalized === todayKey) return 'Due 11:59 PM';
+
+  const tomorrowKey = toDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  if (normalized === tomorrowKey) return 'Due Tomorrow';
+
+  const [y, m, d] = normalized.split('-').map(Number);
+  const dateObj = new Date(y, (m || 1) - 1, d || 1);
+  if (Number.isNaN(dateObj.getTime())) return 'Due 11:59 PM';
+
+  return `Due ${dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+}
+
 function normalizeTask(input) {
   const now = new Date();
   const completed = Boolean(input.completed);
   const duration = Math.round(Number(input.durationMinutes));
+  const dueDate = normalizeDueDateString(input.dueDate ?? endOfDayISO(now), now);
+  const explicitDueLabel = input.dueLabel !== undefined && input.dueLabel !== null ? String(input.dueLabel).trim() : '';
+
   return {
     ...input,
     id: input.id ?? generateId('task'),
     title: String(input.title ?? '').trim(),
-    subjectId: input.subjectId ?? null,
+    subjectId: input.subjectId || null,
     durationMinutes: Number.isFinite(duration) && duration > 0 ? duration : DEFAULT_DURATION_MINUTES,
-    dueLabel: input.dueLabel ?? 'Due 11:59 PM',
-    dueDate: input.dueDate ?? endOfDayISO(now),
+    dueDate,
+    dueLabel: explicitDueLabel || formatDueLabelFromDate(dueDate, now),
     priority: PRIORITIES.includes(input.priority) ? input.priority : 'medium',
+    notes: String(input.notes ?? '').trim(),
     completed,
     completedFlag: completed ? 1 : 0,
     completedAt: completed ? input.completedAt ?? now.toISOString() : null,
@@ -322,13 +349,14 @@ export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
    ========================================================================== */
 
 export async function getAllTasks() {
-  return getAll(STORES.TASKS);
+  const rows = await getAll(STORES.TASKS);
+  return rows.map((row) => normalizeTask(row));
 }
 
 export async function getTaskById(id) {
   const db = await initDB();
   const task = await promisify(db.transaction(STORES.TASKS, 'readonly').objectStore(STORES.TASKS).get(id));
-  return task ?? null;
+  return task ? normalizeTask(task) : null;
 }
 
 /** Inserts (or, when `id` already exists, replaces) a task and returns the saved record. */
@@ -338,7 +366,28 @@ export async function addTask(task) {
 
 export async function updateTask(task) {
   if (!task || !task.id) throw new Error('updateTask requires a task with an id.');
-  return putOne(STORES.TASKS, normalizeTask(task));
+  const db = await initDB();
+  const current = await promisify(
+    db.transaction(STORES.TASKS, 'readonly').objectStore(STORES.TASKS).get(task.id),
+  );
+  const nextDueDate = task.dueDate ?? current?.dueDate;
+  const dueDateChanged =
+    current && task.dueDate !== undefined && normalizeDueDateString(task.dueDate) !== normalizeDueDateString(current.dueDate);
+  const nextDueLabel =
+    task.dueLabel !== undefined
+      ? task.dueLabel
+      : dueDateChanged
+        ? formatDueLabelFromDate(nextDueDate)
+        : current?.dueLabel;
+
+  const merged = normalizeTask({
+    ...(current ?? {}),
+    ...task,
+    id: task.id,
+    dueDate: nextDueDate,
+    dueLabel: nextDueLabel,
+  });
+  return putOne(STORES.TASKS, merged);
 }
 
 /**
