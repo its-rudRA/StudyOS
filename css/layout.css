@@ -210,3 +210,8 @@
     gap: 16px;
   }
 }
+
+/* Enforce HTML5 hidden attribute across all flex/grid views */
+[hidden] {
+  display: none !important;
+}
