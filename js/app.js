@@ -116,6 +116,10 @@ const state = {
     selectedDate: toDateKey(initialNow),
     category: 'all', // 'all' | 'exam' | 'assignment' | 'lab' | 'task'
   },
+  analytics: {
+    range: '7d', // '7d' | '14d' | 'all'
+    sessionSubjectFilter: 'all', // 'all' | subjectId | 'none'
+  },
 };
 
 /** Cached DOM references, filled by cacheElements(). */
@@ -286,6 +290,83 @@ function renderMetrics() {
   }
 
   renderDashboardDeadlinesAndExam();
+  renderDashboardWeeklyChart();
+  renderAnalyticsView();
+}
+
+/**
+ * Renders the Dashboard's bottom-right "Weekly Activity" mini bar chart (last 7 days)
+ * and updates `#weekly-total-label` ("Xh this wk").
+ */
+function renderDashboardWeeklyChart() {
+  if (!refs.dashboardWeekChart && !refs.weeklyTotalLabel) return;
+
+  const now = new Date();
+  const minutesByDate = new Map();
+  for (const session of state.sessions) {
+    if (!session.date) continue;
+    minutesByDate.set(
+      session.date,
+      (minutesByDate.get(session.date) ?? 0) + (Number(session.durationMinutes) || 0),
+    );
+  }
+
+  const buckets = [];
+  let totalMinutes = 0;
+
+  for (let offset = -6; offset <= 0; offset += 1) {
+    const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+    const dateKey = toDateKey(dt);
+    const mins = minutesByDate.get(dateKey) ?? 0;
+    totalMinutes += mins;
+    buckets.push({
+      dateKey,
+      weekday: dt.toLocaleDateString('en-US', { weekday: 'short' }),
+      shortDate: dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      minutes: mins,
+      isToday: offset === 0,
+    });
+  }
+
+  const totalHoursStr = (totalMinutes / 60).toFixed(1).replace(/\.0$/, '');
+  if (refs.weeklyTotalLabel) {
+    refs.weeklyTotalLabel.textContent = `${totalHoursStr}h this wk`;
+  }
+
+  if (!refs.dashboardWeekChart) return;
+
+  const maxMinutes = Math.max(
+    CONFIG.dailyFocusGoalMinutes,
+    ...buckets.map((b) => b.minutes),
+    60,
+  );
+
+  const items = buckets.map((b) => {
+    const pct = b.minutes === 0 ? 0 : Math.max(8, Math.min(100, Math.round((b.minutes / maxMinutes) * 100)));
+    const li = createEl(
+      'li',
+      `week-col${b.isToday ? ' week-col--today' : ''}${b.minutes === 0 && !b.isToday ? ' week-col--future' : ''}`,
+    );
+    if (b.isToday) li.setAttribute('aria-current', 'date');
+    li.title = `${b.weekday}, ${b.shortDate}: ${formatDuration(b.minutes)} logged`;
+
+    const track = createEl('div', 'week-bar-track');
+    const fill = createEl('span', 'week-bar-fill');
+    fill.style.setProperty('--bar-height', `${pct}%`);
+    track.append(fill);
+
+    const dayLabel = createEl('span', 'week-day', b.weekday);
+    const srText = createEl(
+      'span',
+      'visually-hidden',
+      `${formatDuration(b.minutes)}${b.isToday ? ', today' : ''}`,
+    );
+
+    li.append(track, dayLabel, srText);
+    return li;
+  });
+
+  refs.dashboardWeekChart.replaceChildren(...items);
 }
 
 /**
@@ -612,6 +693,7 @@ const VIEW_SECTION_MAP = Object.freeze({
   tasks: 'tasks-view',
   focus: 'focus-view',
   calendar: 'calendar-view',
+  analytics: 'analytics-view',
 });
 
 const WORKSPACE_SECTION_IDS = Object.freeze([
@@ -623,9 +705,7 @@ const WORKSPACE_SECTION_IDS = Object.freeze([
   'analytics-view',
 ]);
 
-const UPCOMING_VIEW_LABELS = Object.freeze({
-  analytics: 'Analytics',
-});
+const UPCOMING_VIEW_LABELS = Object.freeze({});
 
 function enforceActiveViewDOM(activeSectionId) {
   for (const id of WORKSPACE_SECTION_IDS) {
@@ -690,6 +770,9 @@ function switchView(viewName, { updateHash = true } = {}) {
   } else if (viewName === 'calendar') {
     populateSubjectSelects();
     renderCalendarView();
+  } else if (viewName === 'analytics') {
+    populateSubjectSelects();
+    renderAnalyticsView();
   }
 }
 
@@ -697,6 +780,7 @@ function resolveRouteFromHash(rawHash = window.location.hash) {
   const clean = String(rawHash || '').replace(/^#/, '').trim().toLowerCase();
   if (clean === 'focus' || clean === 'focus-view') return { view: 'focus', subjectId: null };
   if (clean === 'calendar' || clean === 'calendar-view') return { view: 'calendar', subjectId: null };
+  if (clean === 'analytics' || clean === 'analytics-view') return { view: 'analytics', subjectId: null };
   if (clean === 'subjects' || clean === 'subjects-view') return { view: 'subjects', subjectId: null };
   if (clean === 'tasks' || clean === 'tasks-view') return { view: 'tasks', subjectId: null };
   if (clean.startsWith('subject-')) {
@@ -1237,7 +1321,28 @@ function populateSubjectSelects() {
     refs.tasksSubjectFilter.value = state.tasksFilter.subjectId;
   }
 
-  for (const selectEl of [refs.taskSubjectSelect, refs.eventSubjectSelect]) {
+  if (refs.analyticsSessionsSubjectFilter) {
+    const prevValue = state.analytics.sessionSubjectFilter;
+    const filterOptions = [createEl('option', '', 'All Subjects')];
+    filterOptions[0].value = 'all';
+
+    for (const subject of state.subjects) {
+      const opt = createEl('option', '', `${subject.code} — ${subject.name}`);
+      opt.value = subject.id;
+      filterOptions.push(opt);
+    }
+
+    const genOpt = createEl('option', '', 'General (GEN)');
+    genOpt.value = 'none';
+    filterOptions.push(genOpt);
+
+    refs.analyticsSessionsSubjectFilter.replaceChildren(...filterOptions);
+    const valid = filterOptions.some((opt) => opt.value === prevValue);
+    state.analytics.sessionSubjectFilter = valid ? prevValue : 'all';
+    refs.analyticsSessionsSubjectFilter.value = state.analytics.sessionSubjectFilter;
+  }
+
+  for (const selectEl of [refs.taskSubjectSelect, refs.eventSubjectSelect, refs.analyticsLogSubject]) {
     if (!selectEl) continue;
     const currentVal = selectEl.value;
     const modalOptions = [];
@@ -2252,6 +2357,7 @@ async function recordAndSyncFocusSession({
   taskId = null,
   durationMinutes,
   title = '',
+  date = null,
   startedAt = null,
 }) {
   const now = new Date();
@@ -2265,13 +2371,15 @@ async function recordAndSyncFocusSession({
 
   const safeMinutes = Math.max(1, Math.round(Number(durationMinutes) || 25));
   const timestamp = now.toISOString();
+  const resolvedDate =
+    date && /^\d{4}-\d{2}-\d{2}$/.test(String(date)) ? String(date) : toDateKey(now);
 
   try {
     const saved = await addSession({
       subjectId: resolvedSubjectId,
       taskId: boundTask ? boundTask.id : null,
       durationMinutes: safeMinutes,
-      date: toDateKey(now),
+      date: resolvedDate,
       timestamp,
       startedAt: startedAt ?? timestamp,
       title: resolvedTitle,
@@ -2947,6 +3055,677 @@ async function handleDeleteEvent(eventId) {
 }
 
 /* ==========================================================================
+   Module 6: Analytics & Study Insights View (#analytics-view)
+   ========================================================================== */
+
+const TONE_COLOR_HEX = Object.freeze({
+  blue: '#60A5FA',
+  green: '#34D399',
+  amber: '#FBBF24',
+  pink: '#F472B6',
+  violet: '#A78BFA',
+  cyan: '#22D3EE',
+});
+
+function formatDecimalHours(minutes) {
+  const total = Math.max(0, Math.round(Number(minutes) || 0));
+  if (total === 0) return '0h';
+  const hrs = total / 60;
+  return Number.isInteger(hrs) ? `${hrs}h` : `${hrs.toFixed(1)}h`;
+}
+
+function getAnalyticsDateWindow(range, now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayKey = toDateKey(today);
+
+  if (range === '7d' || range === '14d') {
+    const daysCount = range === '14d' ? 14 : 7;
+    const dates = [];
+    for (let i = daysCount - 1; i >= 0; i -= 1) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      dates.push(toDateKey(d));
+    }
+    return {
+      range,
+      daysCount,
+      startKey: dates[0],
+      endKey: todayKey,
+      dateKeys: dates,
+      label: range === '14d' ? 'Last 14 Days' : 'Last 7 Days',
+    };
+  }
+
+  // 'all' time: span at least the last 7 days, or from earliest session up to today
+  const sessionDates = state.sessions
+    .map((s) => s.date)
+    .filter((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort();
+
+  const sevenDaysAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+  const sevenDaysAgoKey = toDateKey(sevenDaysAgo);
+  const earliestKey =
+    sessionDates.length > 0 && sessionDates[0] < sevenDaysAgoKey
+      ? sessionDates[0]
+      : sevenDaysAgoKey;
+
+  const [sy, sm, sd] = earliestKey.split('-').map(Number);
+  const startDate = new Date(sy, sm - 1, sd);
+  const diffDays = Math.max(
+    7,
+    Math.min(30, Math.round((today.getTime() - startDate.getTime()) / 86_400_000) + 1),
+  );
+
+  const dates = [];
+  for (let i = diffDays - 1; i >= 0; i -= 1) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    dates.push(toDateKey(d));
+  }
+
+  return {
+    range: 'all',
+    daysCount: Math.max(
+      1,
+      Math.round((today.getTime() - startDate.getTime()) / 86_400_000) + 1,
+    ),
+    startKey: sessionDates[0] || sevenDaysAgoKey,
+    endKey: todayKey,
+    dateKeys: dates,
+    label: 'All Time',
+  };
+}
+
+function getFilteredAnalyticsSessions(windowInfo) {
+  if (windowInfo.range === 'all') {
+    return [...state.sessions];
+  }
+  return state.sessions.filter(
+    (s) => s.date && s.date >= windowInfo.startKey && s.date <= windowInfo.endKey,
+  );
+}
+
+function calculateStudyStreak(now = new Date()) {
+  const activeDates = new Set();
+
+  for (const session of state.sessions) {
+    if (session.date && (Number(session.durationMinutes) || 0) > 0) {
+      activeDates.add(session.date);
+    }
+  }
+
+  for (const task of state.tasks) {
+    if (task.completed) {
+      if (task.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(task.dueDate)) {
+        activeDates.add(task.dueDate);
+      } else if (typeof task.createdAt === 'number') {
+        activeDates.add(toDateKey(new Date(task.createdAt)));
+      }
+    }
+  }
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayKey = toDateKey(today);
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const yesterdayKey = toDateKey(yesterday);
+
+  const hasToday = activeDates.has(todayKey);
+  const hasYesterday = activeDates.has(yesterdayKey);
+
+  if (!hasToday && !hasYesterday) {
+    return {
+      streak: 0,
+      activeToday: false,
+      activeDatesCount: activeDates.size,
+    };
+  }
+
+  let streak = 0;
+  let cursor = hasToday ? today : yesterday;
+
+  while (activeDates.has(toDateKey(cursor))) {
+    streak += 1;
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 1);
+  }
+
+  return {
+    streak,
+    activeToday: hasToday,
+    activeDatesCount: activeDates.size,
+  };
+}
+
+function buildSmartRecommendations(now = new Date()) {
+  const recommendations = [];
+  const todayKey = toDateKey(now);
+  const sevenDaysWindow = getAnalyticsDateWindow('7d', now);
+  const recentSessions = getFilteredAnalyticsSessions(sevenDaysWindow);
+
+  const minutesBySubject = new Map();
+  for (const session of recentSessions) {
+    if (!session.subjectId) continue;
+    minutesBySubject.set(
+      session.subjectId,
+      (minutesBySubject.get(session.subjectId) ?? 0) + (Number(session.durationMinutes) || 0),
+    );
+  }
+
+  // 1. Check upcoming exams within 10 days with low recent focus time
+  const upcomingExams = state.events
+    .filter((ev) => ev.type === 'exam' && ev.date >= todayKey)
+    .map((ev) => ({ ...ev, daysAway: daysBetweenIso(todayKey, ev.date) }))
+    .filter((ev) => ev.daysAway !== null && ev.daysAway <= 14)
+    .sort((a, b) => a.daysAway - b.daysAway);
+
+  for (const exam of upcomingExams) {
+    const subject = getSubject(exam.subjectId);
+    const subjMins = minutesBySubject.get(exam.subjectId) ?? 0;
+    if (subjMins < 120) {
+      const code = subject ? subject.code : 'Exam Prep';
+      const whenText =
+        exam.daysAway === 0
+          ? 'today'
+          : exam.daysAway === 1
+            ? 'tomorrow'
+            : `in ${exam.daysAway} days`;
+      recommendations.push({
+        tone: exam.daysAway <= 4 ? 'high' : 'amber',
+        badge: `${code} · Exam Alert`,
+        title: `${exam.title} is ${whenText} with only ${formatDuration(subjMins)} logged this week`,
+        detail: `Schedule a 50m Deep Work session for ${subject ? subject.name : code} to stay ahead of the curve.`,
+        actionLabel: 'Start 50m Deep Work →',
+        actionType: 'focus-subject',
+        subjectId: exam.subjectId || defaultSubjectId(),
+        minutes: 50,
+      });
+    }
+  }
+
+  // 2. Check high-priority pending tasks with low subject focus time
+  const highPriorityPending = state.tasks.filter(
+    (task) => !task.completed && task.priority === 'high',
+  );
+  for (const task of highPriorityPending) {
+    if (recommendations.length >= 3) break;
+    const subject = getSubject(task.subjectId);
+    const subjMins = minutesBySubject.get(task.subjectId) ?? 0;
+    const code = subject ? subject.code : 'General';
+    recommendations.push({
+      tone: 'indigo',
+      badge: `${code} · High Priority`,
+      title: `Prioritize "${task.title}" (${task.durationMinutes || 45}m est.)`,
+      detail:
+        subjMins === 0
+          ? `No focus sessions logged for ${code} in the last 7 days. Launch a timer now to build momentum.`
+          : `${formatDuration(subjMins)} logged for ${code} this week. Complete this high-priority deliverable next.`,
+      actionLabel: 'Focus on Task →',
+      actionType: 'focus-task',
+      taskId: task.id,
+    });
+  }
+
+  // 3. Check subjects that have pending tasks but 0 minutes logged this week
+  for (const subject of state.subjects) {
+    if (recommendations.length >= 3) break;
+    const pendingForSubject = state.tasks.filter(
+      (t) => !t.completed && t.subjectId === subject.id,
+    );
+    const subjMins = minutesBySubject.get(subject.id) ?? 0;
+    if (pendingForSubject.length > 0 && subjMins === 0) {
+      recommendations.push({
+        tone: 'amber',
+        badge: `${subject.code} · Course Balance`,
+        title: `${subject.code} (${subject.name}) has 0m logged in the last 7 days`,
+        detail: `You have ${pendingForSubject.length} pending task${pendingForSubject.length === 1 ? '' : 's'} waiting in ${subject.code}. Try a quick 25m Pomodoro sprint.`,
+        actionLabel: `Start ${subject.code} Pomodoro →`,
+        actionType: 'focus-subject',
+        subjectId: subject.id,
+        minutes: 25,
+      });
+    }
+  }
+
+  // 4. Positive reinforcement / daily goal check if fewer than 3 recommendations
+  const todayMinutes = state.sessions
+    .filter((s) => s.date === todayKey)
+    .reduce((sum, s) => sum + (Number(s.durationMinutes) || 0), 0);
+
+  if (recommendations.length < 3) {
+    if (todayMinutes < CONFIG.dailyFocusGoalMinutes) {
+      const remaining = CONFIG.dailyFocusGoalMinutes - todayMinutes;
+      recommendations.push({
+        tone: 'emerald',
+        badge: 'Daily Goal Pacing',
+        title: `${formatDuration(remaining)} away from your ${formatDuration(CONFIG.dailyFocusGoalMinutes)} daily target`,
+        detail:
+          todayMinutes > 0
+            ? `Great progress with ${formatDuration(todayMinutes)} logged today. One more focused block will close the gap.`
+            : 'Kick off your first focus session today to keep your academic streak alive.',
+        actionLabel: 'Open Focus Timer →',
+        actionType: 'open-focus',
+      });
+    } else {
+      recommendations.push({
+        tone: 'emerald',
+        badge: 'Target Achieved',
+        title: `Daily focus goal reached (${formatDuration(todayMinutes)} logged today)!`,
+        detail:
+          'You have exceeded your daily target. Review your upcoming calendar milestones or take a well-earned break.',
+        actionLabel: 'View Calendar →',
+        actionType: 'open-calendar',
+      });
+    }
+  }
+
+  return recommendations.slice(0, 3);
+}
+
+function renderAnalyticsView() {
+  if (!refs.analyticsView) return;
+
+  const now = new Date();
+  const todayKey = toDateKey(now);
+  const windowInfo = getAnalyticsDateWindow(state.analytics.range, now);
+  const rangeSessions = getFilteredAnalyticsSessions(windowInfo);
+
+  // Range toggle buttons state
+  if (refs.analyticsRangeButtons) {
+    for (const btn of refs.analyticsRangeButtons) {
+      const active = btn.dataset.analyticsRange === state.analytics.range;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', String(active));
+    }
+  }
+
+  // Total focus minutes in selected range
+  const totalRangeMinutes = rangeSessions.reduce(
+    (sum, s) => sum + (Number(s.durationMinutes) || 0),
+    0,
+  );
+  const avgDailyMinutes = Math.round(totalRangeMinutes / Math.max(1, windowInfo.daysCount));
+  const rangeGoalMinutes = CONFIG.dailyFocusGoalMinutes * Math.max(1, windowInfo.daysCount);
+  const goalPct = Math.min(
+    100,
+    Math.round((totalRangeMinutes / Math.max(60, rangeGoalMinutes)) * 100),
+  );
+
+  // Header summary pill
+  if (refs.analyticsSummaryPill) {
+    refs.analyticsSummaryPill.textContent = `${windowInfo.label} · ${formatDuration(totalRangeMinutes)} across ${rangeSessions.length} session${rangeSessions.length === 1 ? '' : 's'}`;
+  }
+
+  // KPI 1: Total Focus Hours
+  if (refs.analyticsKpiHours) {
+    refs.analyticsKpiHours.textContent = formatDuration(totalRangeMinutes);
+  }
+  if (refs.analyticsKpiGoalBar) {
+    refs.analyticsKpiGoalBar.style.width = `${goalPct}%`;
+  }
+  if (refs.analyticsKpiDailyAvg) {
+    refs.analyticsKpiDailyAvg.textContent = `${formatDuration(avgDailyMinutes)} / day avg`;
+  }
+
+  // KPI 2: Task Completion Rate
+  const totalTasks = state.tasks.length;
+  const completedTasks = state.tasks.filter((t) => t.completed).length;
+  const completionPct = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+  if (refs.analyticsKpiCompletionPct) {
+    refs.analyticsKpiCompletionPct.textContent = `${completionPct}%`;
+  }
+  if (refs.analyticsKpiCompletionBar) {
+    refs.analyticsKpiCompletionBar.style.width = `${completionPct}%`;
+  }
+  if (refs.analyticsKpiCompletionCounts) {
+    refs.analyticsKpiCompletionCounts.textContent = `${completedTasks} of ${totalTasks} tasks completed`;
+  }
+
+  // KPI 3: Current Study Streak
+  const streakInfo = calculateStudyStreak(now);
+  if (refs.analyticsKpiStreakDays) {
+    refs.analyticsKpiStreakDays.textContent = String(streakInfo.streak);
+  }
+  if (refs.analyticsKpiStreakUnit) {
+    refs.analyticsKpiStreakUnit.textContent =
+      streakInfo.streak === 1 ? 'Consecutive Day' : 'Consecutive Days';
+  }
+  if (refs.analyticsKpiStreakMeta) {
+    refs.analyticsKpiStreakMeta.textContent = streakInfo.activeToday
+      ? `Active today · ${streakInfo.activeDatesCount} total study day${streakInfo.activeDatesCount === 1 ? '' : 's'} logged`
+      : streakInfo.streak > 0
+        ? 'Log a session today to extend your streak'
+        : 'Log a session or complete a task to start a streak';
+  }
+
+  // Aggregate minutes per subject across rangeSessions
+  const subjectTotals = new Map();
+  for (const subject of state.subjects) {
+    subjectTotals.set(subject.id, {
+      subject,
+      minutes: 0,
+      sessionsCount: 0,
+    });
+  }
+
+  let unassignedMinutes = 0;
+  let unassignedCount = 0;
+
+  for (const session of rangeSessions) {
+    const mins = Number(session.durationMinutes) || 0;
+    if (session.subjectId && subjectTotals.has(session.subjectId)) {
+      const entry = subjectTotals.get(session.subjectId);
+      entry.minutes += mins;
+      entry.sessionsCount += 1;
+    } else {
+      unassignedMinutes += mins;
+      unassignedCount += 1;
+    }
+  }
+
+  const sortedSubjects = [...subjectTotals.values()].sort(
+    (a, b) => b.minutes - a.minutes || a.subject.code.localeCompare(b.subject.code),
+  );
+
+  // KPI 4: Top Subject by Focus
+  const topEntry = sortedSubjects[0];
+  if (topEntry && topEntry.minutes > 0) {
+    const topShare =
+      totalRangeMinutes > 0 ? Math.round((topEntry.minutes / totalRangeMinutes) * 100) : 0;
+    if (refs.analyticsKpiTopBadge) {
+      refs.analyticsKpiTopBadge.className = `course-tag ${toneClass(topEntry.subject.tone)}`;
+      refs.analyticsKpiTopBadge.textContent = topEntry.subject.code;
+    }
+    if (refs.analyticsKpiTopHours) {
+      refs.analyticsKpiTopHours.textContent = formatDuration(topEntry.minutes);
+    }
+    if (refs.analyticsKpiTopShare) {
+      refs.analyticsKpiTopShare.textContent = `${topShare}% Share`;
+    }
+    if (refs.analyticsKpiTopName) {
+      refs.analyticsKpiTopName.textContent = `${topEntry.subject.name} · ${topEntry.sessionsCount} session${topEntry.sessionsCount === 1 ? '' : 's'}`;
+    }
+  } else {
+    if (refs.analyticsKpiTopBadge) {
+      refs.analyticsKpiTopBadge.className = 'course-tag tag-blue';
+      refs.analyticsKpiTopBadge.textContent = 'None';
+    }
+    if (refs.analyticsKpiTopHours) {
+      refs.analyticsKpiTopHours.textContent = '0m';
+    }
+    if (refs.analyticsKpiTopShare) {
+      refs.analyticsKpiTopShare.textContent = '0% Share';
+    }
+    if (refs.analyticsKpiTopName) {
+      refs.analyticsKpiTopName.textContent = 'Log a focus session to see your top course';
+    }
+  }
+
+  // Main Chart 1: Daily Focus Hours Trend
+  if (refs.analyticsTrendSubtitle) {
+    refs.analyticsTrendSubtitle.textContent =
+      windowInfo.range === '7d'
+        ? 'Logged study time over the last 7 days'
+        : windowInfo.range === '14d'
+          ? 'Logged study time over the last 14 days'
+          : `Logged study time across ${windowInfo.dateKeys.length} recent days`;
+  }
+  if (refs.analyticsTrendTotalBadge) {
+    refs.analyticsTrendTotalBadge.textContent = `${formatDecimalHours(totalRangeMinutes)} Total`;
+  }
+
+  if (refs.analyticsTrendChart) {
+    const minutesByDay = new Map();
+    for (const session of rangeSessions) {
+      if (!session.date) continue;
+      minutesByDay.set(
+        session.date,
+        (minutesByDay.get(session.date) ?? 0) + (Number(session.durationMinutes) || 0),
+      );
+    }
+
+    const dailyRows = windowInfo.dateKeys.map((dateKey) => {
+      const [y, m, d] = dateKey.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      const shortDay = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+      const shortDate = dateObj.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      });
+      return {
+        dateKey,
+        shortDay,
+        shortDate,
+        minutes: minutesByDay.get(dateKey) ?? 0,
+        isToday: dateKey === todayKey,
+      };
+    });
+
+    const maxDayMinutes = Math.max(
+      CONFIG.dailyFocusGoalMinutes,
+      ...dailyRows.map((r) => r.minutes),
+      60,
+    );
+
+    refs.analyticsTrendChart.style.setProperty(
+      '--trend-cols',
+      String(dailyRows.length),
+    );
+
+    refs.analyticsTrendChart.innerHTML = dailyRows
+      .map((row) => {
+        const heightPct =
+          row.minutes === 0
+            ? 4
+            : Math.max(10, Math.min(100, Math.round((row.minutes / maxDayMinutes) * 100)));
+        const valueLabel = row.minutes > 0 ? formatDecimalHours(row.minutes) : '0h';
+        const dayLabel =
+          dailyRows.length <= 7
+            ? row.isToday
+              ? 'Today'
+              : row.shortDay
+            : row.isToday
+              ? 'Today'
+              : row.shortDate.replace(' ', '/');
+        const tooltip = `${row.shortDay}, ${row.shortDate}: ${formatDuration(row.minutes)}`;
+
+        return `<div class="analytics-bar-col${row.isToday ? ' is-today' : ''}${row.minutes === 0 ? ' is-zero' : ''}" title="${escapeHtml(tooltip)}">
+          <span class="analytics-bar-value">${escapeHtml(valueLabel)}</span>
+          <div class="analytics-bar-track">
+            <div class="analytics-bar-fill" style="height: ${heightPct}%"></div>
+          </div>
+          <span class="analytics-bar-day">${escapeHtml(dayLabel)}</span>
+        </div>`;
+      })
+      .join('');
+  }
+
+  // Main Chart 2: Subject Time Distribution
+  const activeCourseCount = sortedSubjects.filter((item) => item.minutes > 0).length;
+  if (refs.analyticsDistCoursesCount) {
+    refs.analyticsDistCoursesCount.textContent = `${activeCourseCount} of ${state.subjects.length} Active Course${state.subjects.length === 1 ? '' : 's'}`;
+  }
+
+  if (refs.analyticsSubjectStackedBar) {
+    if (totalRangeMinutes <= 0) {
+      refs.analyticsSubjectStackedBar.innerHTML =
+        '<div class="analytics-stacked-empty" title="No focus time logged in this window"></div>';
+    } else {
+      const segments = sortedSubjects
+        .filter((item) => item.minutes > 0)
+        .map((item) => {
+          const pct = Math.max(3, Math.round((item.minutes / totalRangeMinutes) * 100));
+          const color = TONE_COLOR_HEX[item.subject.tone] || TONE_COLOR_HEX.blue;
+          return `<div class="analytics-stacked-segment" style="width: ${pct}%; background: ${color}" title="${escapeHtml(item.subject.code)}: ${escapeHtml(formatDuration(item.minutes))} (${pct}%)"></div>`;
+        });
+      if (unassignedMinutes > 0) {
+        const pct = Math.max(3, Math.round((unassignedMinutes / totalRangeMinutes) * 100));
+        segments.push(
+          `<div class="analytics-stacked-segment" style="width: ${pct}%; background: #6B7280" title="General: ${escapeHtml(formatDuration(unassignedMinutes))} (${pct}%)"></div>`,
+        );
+      }
+      refs.analyticsSubjectStackedBar.innerHTML = segments.join('');
+    }
+  }
+
+  if (refs.analyticsSubjectDistList) {
+    if (state.subjects.length === 0) {
+      refs.analyticsSubjectDistList.innerHTML = `<li class="task-empty">No subjects available yet. Add a course in Subjects & Courses.</li>`;
+    } else {
+      refs.analyticsSubjectDistList.innerHTML = sortedSubjects
+        .map(({ subject, minutes, sessionsCount }) => {
+          const pct =
+            totalRangeMinutes > 0 ? Math.round((minutes / totalRangeMinutes) * 100) : 0;
+          const color = TONE_COLOR_HEX[subject.tone] || TONE_COLOR_HEX.blue;
+          return `<li class="analytics-subject-item">
+            <div class="analytics-subject-item-top">
+              <div class="analytics-subject-name-wrap">
+                <span class="course-tag ${toneClass(subject.tone)}">${escapeHtml(subject.code)}</span>
+                <span class="analytics-subject-name">${escapeHtml(subject.name)}</span>
+              </div>
+              <div class="analytics-subject-stats">
+                <span class="analytics-subject-hours">${escapeHtml(formatDuration(minutes))}</span>
+                <span class="analytics-subject-pct">${pct}%</span>
+              </div>
+            </div>
+            <div class="analytics-subject-bar-track">
+              <div class="analytics-subject-bar-fill" style="width: ${pct}%; background: ${color}"></div>
+            </div>
+            <div class="analytics-subject-meta">
+              <span>${sessionsCount} session${sessionsCount === 1 ? '' : 's'} logged</span>
+              <span>${minutes > 0 ? `${Math.round(minutes / Math.max(1, sessionsCount))}m avg session` : 'No sessions in range'}</span>
+            </div>
+          </li>`;
+        })
+        .join('');
+    }
+  }
+
+  // Bottom Left: Smart Study Recommendations
+  if (refs.analyticsRecommendationsList) {
+    const recs = buildSmartRecommendations(now);
+    refs.analyticsRecommendationsList.innerHTML = recs
+      .map(
+        (rec) => `<li class="analytics-rec-card tone-${escapeHtml(rec.tone)}">
+        <div class="analytics-rec-top">
+          <span class="analytics-rec-badge">${escapeHtml(rec.badge)}</span>
+          <button
+            type="button"
+            class="btn-link analytics-rec-action"
+            data-rec-action="${escapeHtml(rec.actionType)}"
+            ${rec.subjectId ? `data-subject-id="${escapeHtml(rec.subjectId)}"` : ''}
+            ${rec.taskId ? `data-task-id="${escapeHtml(rec.taskId)}"` : ''}
+            ${rec.minutes ? `data-minutes="${escapeHtml(String(rec.minutes))}"` : ''}
+          >
+            ${escapeHtml(rec.actionLabel)}
+          </button>
+        </div>
+        <p class="analytics-rec-title">${escapeHtml(rec.title)}</p>
+        <p class="analytics-rec-detail">${escapeHtml(rec.detail)}</p>
+      </li>`,
+      )
+      .join('');
+  }
+
+  // Bottom Right: Recent Focus Sessions Log
+  if (refs.analyticsSessionsList) {
+    const subjFilter = state.analytics.sessionSubjectFilter || 'all';
+    const filteredSessions = rangeSessions
+      .filter((s) => subjFilter === 'all' || s.subjectId === subjFilter)
+      .sort(
+        (a, b) =>
+          (b.date || '').localeCompare(a.date || '') ||
+          (b.completedAt || 0) - (a.completedAt || 0),
+      );
+
+    if (filteredSessions.length === 0) {
+      refs.analyticsSessionsList.innerHTML = `<li class="task-empty">
+        <p class="task-empty-title">No focus sessions match this filter</p>
+        <p class="task-empty-sub">Use "+ Log Study Session" above or run the Focus Timer to record study blocks.</p>
+      </li>`;
+    } else {
+      refs.analyticsSessionsList.innerHTML = filteredSessions
+        .map((session) => {
+          const subject = getSubject(session.subjectId);
+          const tagClass = subject ? toneClass(subject.tone) : 'tag-blue';
+          const tagCode = subject ? subject.code : 'GEN';
+          const dateLabel =
+            session.date === todayKey
+              ? 'Today'
+              : formatDueLabelFromDate(session.date) || session.date;
+          const timeStamp = session.completedAt
+            ? new Date(session.completedAt).toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+              })
+            : '';
+
+          return `<li class="analytics-session-item" data-session-id="${escapeHtml(session.id)}">
+            <span class="course-tag ${tagClass}">${escapeHtml(tagCode)}</span>
+            <div class="analytics-session-info">
+              <p class="analytics-session-title">${escapeHtml(session.title || 'Focus Session')}</p>
+              <span class="analytics-session-meta">${escapeHtml(dateLabel)}${timeStamp ? ` · ${escapeHtml(timeStamp)}` : ''}</span>
+            </div>
+            <span class="analytics-session-duration">${escapeHtml(formatDuration(session.durationMinutes))}</span>
+            <button
+              type="button"
+              class="btn-icon-action is-danger"
+              data-action="delete-analytics-session"
+              data-session-id="${escapeHtml(session.id)}"
+              aria-label="Delete focus session"
+              title="Delete session"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </li>`;
+        })
+        .join('');
+    }
+  }
+}
+
+function toggleAnalyticsLogForm(forceOpen) {
+  if (!refs.analyticsLogForm) return;
+  const shouldOpen =
+    typeof forceOpen === 'boolean' ? forceOpen : refs.analyticsLogForm.hidden;
+  refs.analyticsLogForm.hidden = !shouldOpen;
+  if (shouldOpen) {
+    if (refs.analyticsLogDate && !refs.analyticsLogDate.value) {
+      refs.analyticsLogDate.value = toDateKey();
+    }
+    refs.analyticsLogTitle?.focus();
+  }
+}
+
+async function handleAnalyticsLogFormSubmit(event) {
+  event.preventDefault();
+  const subjectId = refs.analyticsLogSubject?.value || defaultSubjectId();
+  const rawTitle = refs.analyticsLogTitle?.value.trim() || '';
+  const dateVal =
+    refs.analyticsLogDate?.value && /^\d{4}-\d{2}-\d{2}$/.test(refs.analyticsLogDate.value)
+      ? refs.analyticsLogDate.value
+      : toDateKey();
+  const durationMinutes = clampFocusMinutes(refs.analyticsLogDuration?.value, 45);
+  const subject = getSubject(subjectId);
+  const title = rawTitle || (subject ? `${subject.code} Study Session` : 'Study Session');
+
+  const saved = await recordAndSyncFocusSession({
+    subjectId,
+    taskId: null,
+    durationMinutes,
+    title,
+    mode: 'manual',
+    date: dateVal,
+  });
+
+  if (saved) {
+    if (refs.analyticsLogTitle) refs.analyticsLogTitle.value = '';
+    if (refs.analyticsLogDuration) refs.analyticsLogDuration.value = '45';
+    toggleAnalyticsLogForm(false);
+    showToast(`Logged ${durationMinutes}m session for ${subject ? subject.code : 'Study'}!`);
+  }
+}
+
+/* ==========================================================================
    Auto-Plan
    ========================================================================== */
 
@@ -3103,6 +3882,77 @@ function bindEvents() {
       if (!row) return;
       selectCalendarDate(row.dataset.date, { syncMonth: true });
       switchView('calendar');
+    });
+  }
+
+  if (refs.dashboardWeekChart) {
+    refs.dashboardWeekChart.addEventListener('click', () => {
+      switchView('analytics');
+    });
+  }
+
+  // Analytics & Study Insights events
+  if (refs.analyticsRangeGroup) {
+    refs.analyticsRangeGroup.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-analytics-range]');
+      if (!btn) return;
+      state.analytics.range = btn.dataset.analyticsRange;
+      renderAnalyticsView();
+    });
+  }
+
+  if (refs.analyticsLogSessionBtn) {
+    refs.analyticsLogSessionBtn.addEventListener('click', () => {
+      toggleAnalyticsLogForm();
+    });
+  }
+
+  if (refs.analyticsLogCancelBtn) {
+    refs.analyticsLogCancelBtn.addEventListener('click', () => {
+      toggleAnalyticsLogForm(false);
+    });
+  }
+
+  if (refs.analyticsLogForm) {
+    refs.analyticsLogForm.addEventListener('submit', handleAnalyticsLogFormSubmit);
+  }
+
+  if (refs.analyticsSessionsSubjectFilter) {
+    refs.analyticsSessionsSubjectFilter.addEventListener('change', () => {
+      state.analytics.sessionSubjectFilter = refs.analyticsSessionsSubjectFilter.value;
+      renderAnalyticsView();
+    });
+  }
+
+  if (refs.analyticsSessionsList) {
+    refs.analyticsSessionsList.addEventListener('click', (event) => {
+      const delBtn = event.target.closest('[data-action="delete-analytics-session"]');
+      if (delBtn) {
+        handleDeleteFocusSession(delBtn.dataset.sessionId);
+      }
+    });
+  }
+
+  if (refs.analyticsRecommendationsList) {
+    refs.analyticsRecommendationsList.addEventListener('click', (event) => {
+      const actionBtn = event.target.closest('[data-rec-action]');
+      if (!actionBtn) return;
+      const action = actionBtn.dataset.recAction;
+      if (action === 'focus-task' && actionBtn.dataset.taskId) {
+        const task = state.tasks.find((t) => t.id === actionBtn.dataset.taskId);
+        if (task) requestFocusSession(task);
+      } else if (action === 'focus-subject') {
+        const subjectId = actionBtn.dataset.subjectId || defaultSubjectId();
+        const mins = Number(actionBtn.dataset.minutes) || 25;
+        state.focus.subjectId = subjectId;
+        state.focus.taskId = null;
+        selectFocusMode(mins === 50 ? 'deep' : 'pomodoro', mins);
+        switchView('focus');
+      } else if (action === 'open-focus') {
+        switchView('focus');
+      } else if (action === 'open-calendar') {
+        switchView('calendar');
+      }
     });
   }
 
@@ -3704,6 +4554,41 @@ function cacheElements() {
     eventFormError: byId('event-form-error'),
     eventCancelBtn: byId('event-cancel-btn'),
     eventSaveBtn: byId('event-save-btn'),
+    analyticsView: byId('analytics-view'),
+    analyticsSummaryPill: byId('analytics-summary-pill'),
+    analyticsRangeGroup: byId('analytics-range-group'),
+    analyticsRangeButtons: [...document.querySelectorAll('[data-analytics-range]')],
+    analyticsLogSessionBtn: byId('analytics-log-session-btn'),
+    analyticsLogForm: byId('analytics-log-form'),
+    analyticsLogCancelBtn: byId('analytics-log-cancel-btn'),
+    analyticsLogSubject: byId('analytics-log-subject'),
+    analyticsLogTitle: byId('analytics-log-title'),
+    analyticsLogDate: byId('analytics-log-date'),
+    analyticsLogDuration: byId('analytics-log-duration'),
+    analyticsKpiHours: byId('analytics-kpi-hours'),
+    analyticsKpiGoalBar: byId('analytics-kpi-goal-bar'),
+    analyticsKpiDailyAvg: byId('analytics-kpi-daily-avg'),
+    analyticsKpiCompletionPct: byId('analytics-kpi-completion-pct'),
+    analyticsKpiCompletionBar: byId('analytics-kpi-completion-bar'),
+    analyticsKpiCompletionCounts: byId('analytics-kpi-completion-counts'),
+    analyticsKpiStreakDays: byId('analytics-kpi-streak-days'),
+    analyticsKpiStreakUnit: byId('analytics-kpi-streak-unit'),
+    analyticsKpiStreakMeta: byId('analytics-kpi-streak-meta'),
+    analyticsKpiTopBadge: byId('analytics-kpi-top-badge'),
+    analyticsKpiTopHours: byId('analytics-kpi-top-hours'),
+    analyticsKpiTopShare: byId('analytics-kpi-top-share'),
+    analyticsKpiTopName: byId('analytics-kpi-top-name'),
+    analyticsTrendSubtitle: byId('analytics-trend-subtitle'),
+    analyticsTrendTotalBadge: byId('analytics-trend-total-badge'),
+    analyticsTrendChart: byId('analytics-trend-chart'),
+    analyticsDistCoursesCount: byId('analytics-dist-courses-count'),
+    analyticsSubjectStackedBar: byId('analytics-subject-stacked-bar'),
+    analyticsSubjectDistList: byId('analytics-subject-dist-list'),
+    analyticsRecommendationsList: byId('analytics-recommendations-list'),
+    analyticsSessionsSubjectFilter: byId('analytics-sessions-subject-filter'),
+    analyticsSessionsList: byId('analytics-sessions-list'),
+    weeklyTotalLabel: byId('weekly-total-label'),
+    dashboardWeekChart: byId('dashboard-week-chart'),
     greeting: byId('greeting-title'),
     dateDisplay: byId('current-date-display'),
     tasksDone: byId('metric-tasks-done'),
@@ -3782,6 +4667,7 @@ async function init() {
     renderTasksView();
     renderFocusView();
     renderCalendarView();
+    renderAnalyticsView();
     renderMetrics();
     renderPlannedBlocks();
 
@@ -3798,6 +4684,7 @@ async function init() {
     renderTasksView();
     renderFocusView();
     renderCalendarView();
+    renderAnalyticsView();
     renderPlannedBlocks();
     applyHashRoute({ updateHash: false });
     showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });

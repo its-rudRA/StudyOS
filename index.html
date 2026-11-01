@@ -339,10 +339,10 @@
             <section class="panel" aria-labelledby="weekly-panel-title">
               <header class="panel-header">
                 <h2 class="panel-title" id="weekly-panel-title">Weekly Activity</h2>
-                <span class="panel-label">14.5h this wk</span>
+                <span class="panel-label" id="weekly-total-label">11.3h this wk</span>
               </header>
               <div class="panel-body">
-                <ul class="week-chart">
+                <ul class="week-chart" id="dashboard-week-chart">
                   <li class="week-col">
                     <div class="week-bar-track"><span class="week-bar-fill" style="--bar-height: 100%"></span></div>
                     <span class="week-day">Mon</span><span class="visually-hidden">3.5 hours</span>
@@ -821,6 +821,249 @@
                 </div>
               </section>
             </aside>
+          </div>
+        </section>
+
+        <!-- ===================== Module 6: Analytics & Study Insights View ===================== -->
+        <section id="analytics-view" class="analytics-view" hidden style="display: none" aria-labelledby="analytics-view-title">
+          <div class="analytics-view-header">
+            <div class="analytics-view-header-info">
+              <div class="analytics-view-title-row">
+                <h2 id="analytics-view-title" class="analytics-view-title">Study Analytics &amp; Performance Insights</h2>
+                <span class="tasks-summary-pill" id="analytics-summary-pill">Last 7 Days</span>
+              </div>
+              <p class="analytics-view-subtitle">
+                Deep-work focus trends, course time distribution, completion velocity, and personalized study recommendations.
+              </p>
+            </div>
+
+            <div class="analytics-header-actions">
+              <div class="segmented analytics-range-group" id="analytics-range-group" role="group" aria-label="Analytics time range">
+                <button type="button" class="segmented-btn active" data-analytics-range="7d" aria-pressed="true">
+                  Last 7 Days
+                </button>
+                <button type="button" class="segmented-btn" data-analytics-range="14d" aria-pressed="false">
+                  Last 14 Days
+                </button>
+                <button type="button" class="segmented-btn" data-analytics-range="all" aria-pressed="false">
+                  All Time
+                </button>
+              </div>
+
+              <button type="button" class="btn-primary" id="analytics-log-session-btn" aria-expanded="false">
+                <span aria-hidden="true">+</span>
+                <span>Log Study Session</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Collapsible Quick-Log Study Session Bar inside Analytics -->
+          <form id="analytics-log-form" class="panel analytics-log-form" hidden novalidate>
+            <header class="panel-header">
+              <h3 class="panel-title">Log Study Session</h3>
+              <button type="button" class="btn-ghost" id="analytics-log-cancel-btn">Cancel</button>
+            </header>
+            <div class="panel-body analytics-log-grid">
+              <div class="form-field">
+                <label for="analytics-log-subject" class="form-label">Course / Subject</label>
+                <select id="analytics-log-subject" class="tasks-select focus-full-select"></select>
+              </div>
+              <div class="form-field">
+                <label for="analytics-log-title" class="form-label">Session Topic / Note</label>
+                <input
+                  type="text"
+                  id="analytics-log-title"
+                  class="form-input"
+                  placeholder="e.g., Dynamic programming problem set review"
+                  maxlength="120"
+                />
+              </div>
+              <div class="form-field">
+                <label for="analytics-log-date" class="form-label">Session Date</label>
+                <input type="date" id="analytics-log-date" class="form-input" />
+              </div>
+              <div class="form-field">
+                <label for="analytics-log-duration" class="form-label">Duration (min)</label>
+                <input
+                  type="number"
+                  id="analytics-log-duration"
+                  class="form-input"
+                  min="5"
+                  max="360"
+                  step="5"
+                  value="45"
+                />
+              </div>
+              <div class="analytics-log-submit">
+                <button type="submit" class="btn-primary">Save Session</button>
+              </div>
+            </div>
+          </form>
+
+          <!-- Top KPI Summary Row (4 Cards) -->
+          <div class="analytics-kpi-grid" role="region" aria-label="Key study performance metrics">
+            <!-- KPI 1: Total Focus Hours -->
+            <article class="card stat-card analytics-kpi-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                </span>
+                <h3 class="stat-label">Total Focus Hours</h3>
+              </div>
+              <p class="stat-metric">
+                <span id="analytics-kpi-hours" class="metric-big">11h 15m</span>
+                <span class="stat-unit">Logged</span>
+              </p>
+              <div class="stat-progress">
+                <div class="progress-track" role="progressbar" aria-label="Daily focus average vs 4h goal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="70">
+                  <div id="analytics-kpi-goal-bar" class="progress-fill" style="width: 70%"></div>
+                </div>
+                <span id="analytics-kpi-daily-avg" class="stat-pct">1h 36m / day avg</span>
+              </div>
+            </article>
+
+            <!-- KPI 2: Task Completion Rate -->
+            <article class="card stat-card analytics-kpi-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/>
+                  </svg>
+                </span>
+                <h3 class="stat-label">Task Completion Rate</h3>
+              </div>
+              <p class="stat-metric">
+                <span id="analytics-kpi-completion-pct" class="metric-big">67%</span>
+                <span class="stat-unit">Completed</span>
+              </p>
+              <div class="stat-progress">
+                <div class="progress-track" role="progressbar" aria-label="Task completion percentage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="67">
+                  <div id="analytics-kpi-completion-bar" class="progress-fill" style="width: 67%"></div>
+                </div>
+                <span id="analytics-kpi-completion-counts" class="stat-pct">4 of 6 tasks done</span>
+              </div>
+            </article>
+
+            <!-- KPI 3: Current Study Streak -->
+            <article class="card stat-card analytics-kpi-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
+                  </svg>
+                </span>
+                <h3 class="stat-label">Current Study Streak</h3>
+              </div>
+              <p class="stat-metric">
+                <span id="analytics-kpi-streak-days" class="metric-big">4</span>
+                <span class="stat-unit" id="analytics-kpi-streak-unit">Consecutive Days</span>
+              </p>
+              <p class="exam-meta" id="analytics-kpi-streak-meta">Active today • 10 sessions logged</p>
+            </article>
+
+            <!-- KPI 4: Top Subject by Focus -->
+            <article class="card stat-card analytics-kpi-card">
+              <div class="stat-top">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>
+                  </svg>
+                </span>
+                <h3 class="stat-label">Top Subject by Focus</h3>
+                <span class="course-tag course-tag--blue" id="analytics-kpi-top-badge">CS-301</span>
+              </div>
+              <p class="stat-metric">
+                <span id="analytics-kpi-top-hours" class="metric-big">3h 50m</span>
+                <span class="stat-unit" id="analytics-kpi-top-share">34% of total</span>
+              </p>
+              <p class="exam-meta" id="analytics-kpi-top-name">Algorithms • Most focused course</p>
+            </article>
+          </div>
+
+          <!-- Main Charts Grid (2 Columns) -->
+          <div class="analytics-charts-grid">
+            <!-- Left Card: Daily Focus Hours Trend -->
+            <section class="panel analytics-chart-panel" aria-labelledby="analytics-trend-title">
+              <header class="panel-header">
+                <div>
+                  <h3 class="panel-title" id="analytics-trend-title">Daily Focus Hours Trend</h3>
+                  <p class="analytics-panel-subtitle" id="analytics-trend-subtitle">
+                    Logged study hours per day compared against your 4.0h daily target
+                  </p>
+                </div>
+                <div class="analytics-trend-badges">
+                  <span class="analytics-goal-legend">
+                    <span class="analytics-goal-line-swatch" aria-hidden="true"></span>
+                    4.0h Daily Goal
+                  </span>
+                  <span class="tasks-summary-pill" id="analytics-trend-total-badge">11.3h total</span>
+                </div>
+              </header>
+              <div class="panel-body analytics-trend-body">
+                <div class="analytics-trend-chart-wrap" id="analytics-trend-chart" role="img" aria-label="Daily focus hours bar chart"></div>
+              </div>
+            </section>
+
+            <!-- Right Card: Subject Time Distribution -->
+            <section class="panel analytics-chart-panel" aria-labelledby="analytics-dist-title">
+              <header class="panel-header">
+                <div>
+                  <h3 class="panel-title" id="analytics-dist-title">Subject Time Distribution</h3>
+                  <p class="analytics-panel-subtitle">
+                    Course allocation share, total focus time, and task completion ratio
+                  </p>
+                </div>
+                <span class="panel-label" id="analytics-dist-courses-count">4 courses</span>
+              </header>
+              <div class="panel-body analytics-dist-body">
+                <!-- Stacked horizontal overview bar -->
+                <div class="analytics-stacked-bar" id="analytics-subject-stacked-bar" aria-label="Subject focus share breakdown"></div>
+                <!-- Per-subject rows -->
+                <ul class="analytics-subject-list" id="analytics-subject-dist-list"></ul>
+              </div>
+            </section>
+          </div>
+
+          <!-- Bottom Insights & Session Log Section (2 Columns) -->
+          <div class="analytics-bottom-grid">
+            <!-- Left Card: Smart Study Recommendations -->
+            <section class="panel analytics-insights-panel" aria-labelledby="analytics-insights-title">
+              <header class="panel-header">
+                <div>
+                  <h3 class="panel-title" id="analytics-insights-title">Smart Study Recommendations</h3>
+                  <p class="analytics-panel-subtitle">
+                    Rule-based diagnostics generated from your upcoming exams, tasks, and focus logs
+                  </p>
+                </div>
+                <span class="panel-label" id="analytics-insights-badge">Live Analysis</span>
+              </header>
+              <div class="panel-body">
+                <ul class="analytics-recommendations-list" id="analytics-recommendations-list"></ul>
+              </div>
+            </section>
+
+            <!-- Right Card: Recent Focus Sessions -->
+            <section class="panel analytics-sessions-panel" aria-labelledby="analytics-sessions-title">
+              <header class="panel-header">
+                <div>
+                  <h3 class="panel-title" id="analytics-sessions-title">Recent Focus Sessions</h3>
+                  <p class="analytics-panel-subtitle" id="analytics-sessions-subtitle">
+                    Filter or remove logged focus sessions stored in IndexedDB
+                  </p>
+                </div>
+                <div class="analytics-sessions-filter-wrap">
+                  <label for="analytics-sessions-subject-filter" class="visually-hidden">Filter sessions by subject</label>
+                  <select id="analytics-sessions-subject-filter" class="tasks-select">
+                    <option value="all">All Subjects</option>
+                  </select>
+                </div>
+              </header>
+              <div class="panel-body">
+                <ul class="analytics-sessions-list" id="analytics-sessions-list"></ul>
+              </div>
+            </section>
           </div>
         </section>
 
