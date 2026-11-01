@@ -31,6 +31,7 @@ import {
   EVENT_TYPES,
   exportDatabase,
   importDatabase,
+  resetDemoDatabase,
   toDateKey,
   normalizeDueDateString,
   formatDueLabelFromDate,
@@ -3938,6 +3939,42 @@ async function handleConfirmRestoreBackup() {
   }
 }
 
+async function handleResetDemoData() {
+  toggleDataMenu(false);
+  try {
+    await resetDemoDatabase();
+    const [subjects, tasks, sessions, blocks, events] = await Promise.all([
+      getAllSubjects(),
+      getAllTasks(),
+      getAllSessions(),
+      getScheduleBlocks(),
+      getAllEvents(),
+    ]);
+
+    Object.assign(state, { subjects, tasks, sessions, blocks, events });
+    state.focus.subjectId = defaultSubjectId();
+    state.focus.taskId = null;
+    setStorageStatus(true);
+
+    renderSubjects();
+    populateSubjectSelects();
+    renderSubjectsView();
+    renderFilters();
+    renderTaskList();
+    renderTasksView();
+    renderFocusView();
+    renderCalendarView();
+    renderAnalyticsView();
+    renderMetrics();
+    renderPlannedBlocks();
+
+    showToast('Demo data refreshed with 7-day focus sessions & current milestones!');
+  } catch (error) {
+    console.error('StudyOS: could not reset demo database —', error);
+    showToast('Could not reset demo data. Please try again.', { tone: 'error' });
+  }
+}
+
 /* ==========================================================================
    Events
    ========================================================================== */
@@ -4473,6 +4510,12 @@ function bindEvents() {
     });
   }
 
+  if (refs.resetDemoBtn) {
+    refs.resetDemoBtn.addEventListener('click', () => {
+      handleResetDemoData();
+    });
+  }
+
   if (refs.restoreBackupInput) {
     refs.restoreBackupInput.addEventListener('change', handleRestoreFileSelected);
   }
@@ -4674,6 +4717,12 @@ const api = {
     await ready;
     return importDatabase(jsonInput);
   },
+
+  /** Clears all stores and re-seeds fresh relative demo data. */
+  async resetDemoData() {
+    await ready;
+    return resetDemoDatabase();
+  },
 };
 
 window.StudyOS = Object.freeze({ version: '0.1.0', ready, api });
@@ -4861,6 +4910,7 @@ function cacheElements() {
     dataManagementMenu: byId('data-management-menu'),
     exportBackupBtn: byId('export-backup-btn'),
     restoreBackupBtn: byId('restore-backup-btn'),
+    resetDemoBtn: byId('reset-demo-btn'),
     restoreBackupInput: byId('restore-backup-input'),
     restoreConfirmModal: byId('restore-confirm-modal'),
     restoreModalClose: byId('restore-modal-close'),
@@ -4924,7 +4974,7 @@ async function init() {
     await ensureTodaysPlan();
     resolveReady();
   } catch (error) {
-    console.warn('StudyOS: IndexedDB is unavailable.', error);
+    console.error('StudyOS: IndexedDB initialization failed —', error);
     setStorageStatus(false);
     populateSubjectSelects();
     renderSubjectsView();

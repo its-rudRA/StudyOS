@@ -4031,6 +4031,12 @@ body.is-zen-mode .workspace-inner {
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
+.data-menu-icon--emerald {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
 .data-menu-item-text {
   display: flex;
   flex-direction: column;

@@ -177,50 +177,125 @@ function normalizeEvent(input = {}) {
    Open + seed
    ========================================================================== */
 
+function ensureStoreAndIndexes(db, tx, storeName, indexes = []) {
+  let store;
+  if (!db.objectStoreNames.contains(storeName)) {
+    store = db.createObjectStore(storeName, { keyPath: 'id' });
+  } else if (tx) {
+    store = tx.objectStore(storeName);
+  }
+  if (!store) return;
+
+  for (const { name, keyPath, options } of indexes) {
+    if (!store.indexNames.contains(name)) {
+      try {
+        store.createIndex(name, keyPath, options ?? { unique: false });
+      } catch (err) {
+        console.warn(`StudyOS: could not create index "${name}" on "${storeName}".`, err);
+      }
+    }
+  }
+}
+
 function openDatabase() {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in globalThis)) {
-      reject(new Error('IndexedDB is not available in this environment.'));
+      const err = new Error('IndexedDB is not available in this environment.');
+      console.error('StudyOS: openDatabase failed —', err);
+      reject(err);
       return;
     }
 
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    let blockTimer = null;
 
-    request.onupgradeneeded = () => {
-      const db = request.result;
-
-      if (!db.objectStoreNames.contains(STORES.SUBJECTS)) {
-        db.createObjectStore(STORES.SUBJECTS, { keyPath: 'id' });
-      }
-
-      if (!db.objectStoreNames.contains(STORES.TASKS)) {
-        const tasks = db.createObjectStore(STORES.TASKS, { keyPath: 'id' });
-        tasks.createIndex('subjectId', 'subjectId', { unique: false });
-        tasks.createIndex('completed', 'completedFlag', { unique: false });
-        tasks.createIndex('dueDate', 'dueDate', { unique: false });
-      }
-
-      if (!db.objectStoreNames.contains(STORES.SESSIONS)) {
-        const sessions = db.createObjectStore(STORES.SESSIONS, { keyPath: 'id' });
-        sessions.createIndex('date', 'date', { unique: false });
-        sessions.createIndex('subjectId', 'subjectId', { unique: false });
-      }
-
-      if (!db.objectStoreNames.contains(STORES.SCHEDULE_BLOCKS)) {
-        db.createObjectStore(STORES.SCHEDULE_BLOCKS, { keyPath: 'id' });
-      }
-
-      if (!db.objectStoreNames.contains(STORES.EVENTS)) {
-        const events = db.createObjectStore(STORES.EVENTS, { keyPath: 'id' });
-        events.createIndex('date', 'date', { unique: false });
-        events.createIndex('subjectId', 'subjectId', { unique: false });
-        events.createIndex('type', 'type', { unique: false });
+    const clearBlockTimer = () => {
+      if (blockTimer) {
+        clearTimeout(blockTimer);
+        blockTimer = null;
       }
     };
 
-    request.onsuccess = () => {
+    let request;
+    try {
+      request = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (err) {
+      console.error('StudyOS: indexedDB.open threw synchronously —', err);
+      reject(err);
+      return;
+    }
+
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      // Let a future schema upgrade in another tab proceed instead of blocking it.
+      const tx = event.target?.transaction ?? request.transaction;
+
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+
+      ensureStoreAndIndexes(db, tx, STORES.SUBJECTS, []);
+      ensureStoreAndIndexes(db, tx, STORES.TASKS, [
+        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+        { name: 'completed', keyPath: 'completedFlag', options: { unique: false } },
+        { name: 'dueDate', keyPath: 'dueDate', options: { unique: false } },
+      ]);
+      ensureStoreAndIndexes(db, tx, STORES.SESSIONS, [
+        { name: 'date', keyPath: 'date', options: { unique: false } },
+        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+      ]);
+      ensureStoreAndIndexes(db, tx, STORES.SCHEDULE_BLOCKS, []);
+      ensureStoreAndIndexes(db, tx, STORES.EVENTS, [
+        { name: 'date', keyPath: 'date', options: { unique: false } },
+        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+        { name: 'type', keyPath: 'type', options: { unique: false } },
+      ]);
+    };
+
+    request.onblocked = () => {
+      console.warn(
+        'StudyOS: IndexedDB upgrade is blocked by another open connection. Waiting briefly...',
+      );
+      clearBlockTimer();
+      blockTimer = setTimeout(() => {
+        if (settled) return;
+        // Fallback: open without explicit version so existing v1/v2 connection still works
+        try {
+          const fallbackReq = indexedDB.open(DB_NAME);
+          fallbackReq.onsuccess = () => {
+            if (settled) {
+              fallbackReq.result.close();
+              return;
+            }
+            settled = true;
+            const db = fallbackReq.result;
+            db.onversionchange = () => {
+              db.close();
+              dbPromise = null;
+            };
+            resolve(db);
+          };
+          fallbackReq.onerror = () => {
+            if (settled) return;
+            settled = true;
+            console.error('StudyOS: fallback indexedDB.open failed —', fallbackReq.error);
+            reject(fallbackReq.error || new Error('IndexedDB upgrade blocked.'));
+          };
+        } catch (fallbackErr) {
+          if (settled) return;
+          settled = true;
+          console.error('StudyOS: fallback indexedDB.open threw —', fallbackErr);
+          reject(fallbackErr);
+        }
+      }, 1200);
+    };
+
+    request.onsuccess = () => {
+      clearBlockTimer();
+      if (settled) return;
+      settled = true;
+      const db = request.result;
+      // Let any future schema upgrade in another tab proceed instead of blocking it.
       db.onversionchange = () => {
         db.close();
         dbPromise = null;
@@ -228,49 +303,160 @@ function openDatabase() {
       resolve(db);
     };
 
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      clearBlockTimer();
+      if (settled) return;
+      settled = true;
+      console.error('StudyOS: IndexedDB open error —', request.error);
+      reject(request.error);
+    };
   });
 }
 
 /**
- * Seeds demo data in ONE transaction if `subjects` is empty, and also seeds
- * the 3 initial academic events if `events` is empty (e.g. after v1 -> v2 upgrade).
+ * Checks each store (`subjects`, `tasks`, `sessions`, `events`, `scheduleBlocks`)
+ * independently:
+ * - Seeds missing stores.
+ * - If all existing `sessions` are older than 7 days (e.g. from October) or empty,
+ *   seeds fresh 7-day sample focus sessions relative to today.
+ * - If existing `events` are empty or have past dates from October, rolls their
+ *   dates forward relative to today (`+4d`, `+7d`, `+11d`).
+ * - If seeded pending tasks have past due dates from October, refreshes their
+ *   dueDate to today so the Dashboard and Calendar stay current.
  */
 function seedIfEmpty(db) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(Object.values(STORES), 'readwrite');
-    const subjectCountReq = tx.objectStore(STORES.SUBJECTS).count();
-    const eventCountReq = tx.objectStore(STORES.EVENTS).count();
+  return new Promise((resolve) => {
+    const availableStores = Object.values(STORES).filter((name) =>
+      db.objectStoreNames.contains(name),
+    );
+    if (availableStores.length === 0) {
+      resolve();
+      return;
+    }
 
-    let seedData = null;
-    const ensureSeedData = () => {
-      if (!seedData) seedData = buildSeedData(new Date());
-      return seedData;
-    };
+    let tx;
+    try {
+      tx = db.transaction(availableStores, 'readwrite');
+    } catch (txErr) {
+      console.error('StudyOS: could not open seedIfEmpty transaction —', txErr);
+      resolve();
+      return;
+    }
 
-    subjectCountReq.onsuccess = () => {
-      if (subjectCountReq.result > 0) return;
-      const seed = ensureSeedData();
-      seed.subjects.forEach((row) => tx.objectStore(STORES.SUBJECTS).put(normalizeSubject(row)));
-      seed.tasks.forEach((row) => tx.objectStore(STORES.TASKS).put(normalizeTask(row)));
-      seed.sessions.forEach((row) => tx.objectStore(STORES.SESSIONS).put(row));
-      seed.scheduleBlocks.forEach((row) => tx.objectStore(STORES.SCHEDULE_BLOCKS).put(row));
-    };
+    const now = new Date();
+    const todayKey = toDateKey(now);
+    const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+    const sevenDaysAgoKey = toDateKey(sevenDaysAgo);
+    const seed = buildSeedData(now);
 
-    eventCountReq.onsuccess = () => {
-      if (eventCountReq.result > 0) return;
-      const seed = ensureSeedData();
-      seed.events.forEach((row) => tx.objectStore(STORES.EVENTS).put(normalizeEvent(row)));
-    };
+    if (availableStores.includes(STORES.SUBJECTS)) {
+      const subjectStore = tx.objectStore(STORES.SUBJECTS);
+      const countReq = subjectStore.count();
+      countReq.onsuccess = () => {
+        if (countReq.result === 0) {
+          seed.subjects.forEach((row) => subjectStore.put(normalizeSubject(row)));
+        }
+      };
+    }
+
+    if (availableStores.includes(STORES.TASKS)) {
+      const taskStore = tx.objectStore(STORES.TASKS);
+      const getAllTasksReq = taskStore.getAll();
+      getAllTasksReq.onsuccess = () => {
+        const existingTasks = getAllTasksReq.result ?? [];
+        if (existingTasks.length === 0) {
+          seed.tasks.forEach((row) => taskStore.put(normalizeTask(row)));
+          return;
+        }
+        // If all tasks are untouched seed tasks from a previous month (e.g. October), refresh their dates
+        const allSeedTasksStale =
+          existingTasks.every((t) => String(t.id || '').startsWith('task-seed-')) &&
+          existingTasks.some((t) => !t.completed && String(t.dueDate || '') < todayKey);
+        if (allSeedTasksStale) {
+          seed.tasks.forEach((row) => {
+            const prev = existingTasks.find((t) => t.id === row.id);
+            taskStore.put(
+              normalizeTask({
+                ...row,
+                completed: prev ? prev.completed : row.completed,
+              }),
+            );
+          });
+        }
+      };
+    }
+
+    if (availableStores.includes(STORES.SESSIONS)) {
+      const sessionStore = tx.objectStore(STORES.SESSIONS);
+      const getAllSessionsReq = sessionStore.getAll();
+      getAllSessionsReq.onsuccess = () => {
+        const existingSessions = getAllSessionsReq.result ?? [];
+        const hasRecentSession = existingSessions.some(
+          (s) => s && typeof s.date === 'string' && s.date >= sevenDaysAgoKey && s.date <= todayKey,
+        );
+        if (existingSessions.length === 0 || !hasRecentSession) {
+          // Remove old stale seed sessions so IDs don't collide, then insert fresh 7-day sessions
+          for (const old of existingSessions) {
+            if (String(old.id || '').startsWith('session-seed-')) {
+              sessionStore.delete(old.id);
+            }
+          }
+          seed.sessions.forEach((row) => sessionStore.put(row));
+        }
+      };
+    }
+
+    if (availableStores.includes(STORES.SCHEDULE_BLOCKS)) {
+      const blockStore = tx.objectStore(STORES.SCHEDULE_BLOCKS);
+      const getAllBlocksReq = blockStore.getAll();
+      getAllBlocksReq.onsuccess = () => {
+        const existingBlocks = getAllBlocksReq.result ?? [];
+        if (existingBlocks.length === 0) {
+          seed.scheduleBlocks.forEach((row) => blockStore.put(row));
+        }
+      };
+    }
+
+    if (availableStores.includes(STORES.EVENTS)) {
+      const eventStore = tx.objectStore(STORES.EVENTS);
+      const getAllEventsReq = eventStore.getAll();
+      getAllEventsReq.onsuccess = () => {
+        const existingEvents = getAllEventsReq.result ?? [];
+        if (existingEvents.length === 0) {
+          seed.events.forEach((row) => eventStore.put(normalizeEvent(row)));
+          return;
+        }
+        // Roll forward any existing events whose dates fell in the past (e.g. October)
+        const forwardOffsets = [4, 7, 11, 14];
+        let staleIndex = 0;
+        for (const ev of existingEvents) {
+          const evDate = normalizeDueDateString(ev.date, now);
+          if (evDate < todayKey) {
+            const offset = forwardOffsets[staleIndex % forwardOffsets.length];
+            staleIndex += 1;
+            const rolledDate = toDateKey(
+              new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset),
+            );
+            eventStore.put(normalizeEvent({ ...ev, date: rolledDate }));
+          }
+        }
+      };
+    }
 
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('Seeding transaction aborted.'));
+    tx.onerror = () => {
+      console.error('StudyOS: seedIfEmpty transaction error —', tx.error);
+      resolve(); // Resolve so app still boots with existing DB connection
+    };
+    tx.onabort = () => {
+      console.error('StudyOS: seedIfEmpty transaction aborted —', tx.error);
+      resolve();
+    };
   });
 }
 
 /**
- * Opens the database (once) and seeds it on first run.
+ * Opens the database (once) and seeds/refreshes it on startup.
  * Safe to call repeatedly — every caller shares the same promise.
  * @returns {Promise<IDBDatabase>}
  */
@@ -282,6 +468,7 @@ export function initDB() {
         return db;
       })
       .catch((error) => {
+        console.error('StudyOS: initDB failed —', error);
         dbPromise = null; // allow a retry after a failure
         throw error;
       });
@@ -781,6 +968,50 @@ export async function importDatabase(jsonInput) {
   };
 }
 
+/**
+ * Clears all object stores and re-seeds fresh demo data with dates relative to today.
+ */
+export async function resetDemoDatabase() {
+  const db = await initDB();
+  const availableStores = Object.values(STORES).filter((name) =>
+    db.objectStoreNames.contains(name),
+  );
+  const tx = db.transaction(availableStores, 'readwrite');
+  const seed = buildSeedData(new Date());
+
+  for (const storeName of availableStores) {
+    tx.objectStore(storeName).clear();
+  }
+
+  if (availableStores.includes(STORES.SUBJECTS)) {
+    seed.subjects.forEach((row) => tx.objectStore(STORES.SUBJECTS).put(normalizeSubject(row)));
+  }
+  if (availableStores.includes(STORES.TASKS)) {
+    seed.tasks.forEach((row) => tx.objectStore(STORES.TASKS).put(normalizeTask(row)));
+  }
+  if (availableStores.includes(STORES.SESSIONS)) {
+    seed.sessions.forEach((row) => tx.objectStore(STORES.SESSIONS).put(row));
+  }
+  if (availableStores.includes(STORES.SCHEDULE_BLOCKS)) {
+    seed.scheduleBlocks.forEach((row) => tx.objectStore(STORES.SCHEDULE_BLOCKS).put(row));
+  }
+  if (availableStores.includes(STORES.EVENTS)) {
+    seed.events.forEach((row) => tx.objectStore(STORES.EVENTS).put(normalizeEvent(row)));
+  }
+
+  await transactionDone(tx);
+  return {
+    success: true,
+    counts: {
+      subjects: seed.subjects.length,
+      tasks: seed.tasks.length,
+      sessions: seed.sessions.length,
+      events: seed.events.length,
+      scheduleBlocks: seed.scheduleBlocks.length,
+    },
+  };
+}
+
 /* ==========================================================================
    Seed data (first run only)
    ========================================================================== */
@@ -818,25 +1049,80 @@ function buildSeedData(now) {
     completedAt: row.completed ? new Date(now.getTime() - (index + 1) * 600000).toISOString() : null,
   }));
 
-  // Focus sessions: today = 135 min (2h 15m). The three earlier days follow the
-  // dashboard's chart (3.5h, 2.5h, 3.0h); later days are plan, not history.
+  // Focus sessions across the last 7 days (today = 135 min / 2h 15m) so both the
+  // Dashboard Weekly Activity chart and Analytics 7-day trend display rich bars immediately.
   const sessionPlan = [
-    { dayOffset: -3, items: [['cs-301', 90], ['math-204', 60], ['hum-110', 60]] }, // 210 min
-    { dayOffset: -2, items: [['phys-102', 60], ['cs-301', 90]] },                  // 150 min
-    { dayOffset: -1, items: [['math-204', 90], ['phys-102', 45], ['hum-110', 45]] }, // 180 min
-    { dayOffset: 0, items: [['cs-301', 50], ['math-204', 45], ['phys-102', 40]] },   // 135 min
+    {
+      dayOffset: -6,
+      items: [
+        ['cs-301', 60, 'Divide & Conquer Recurrence Relations'],
+        ['math-204', 45, 'Vector Subspace Basis Proofs'],
+      ],
+    }, // 105 min (1.8h)
+    {
+      dayOffset: -5,
+      items: [
+        ['phys-102', 50, 'Gauss Law Flux Integrals'],
+        ['hum-110', 40, 'Utilitarianism vs Deontology Reading'],
+      ],
+    }, // 90 min (1.5h)
+    {
+      dayOffset: -4,
+      items: [
+        ['cs-301', 75, 'Graph Traversal & Topological Sort'],
+        ['math-204', 50, 'Rank-Nullity Theorem Problem Set'],
+      ],
+    }, // 125 min (2.1h)
+    {
+      dayOffset: -3,
+      items: [
+        ['cs-301', 90, 'Dynamic Programming Memoization Tables'],
+        ['math-204', 60, 'Eigenvalues & Characteristic Polynomials'],
+        ['hum-110', 60, "Kant's Categorical Imperative Seminar Prep"],
+      ],
+    }, // 210 min (3.5h)
+    {
+      dayOffset: -2,
+      items: [
+        ['phys-102', 60, 'Magnetic Field & Biot-Savart Law'],
+        ['cs-301', 90, 'Shortest Paths & Dijkstra Heap Implementation'],
+      ],
+    }, // 150 min (2.5h)
+    {
+      dayOffset: -1,
+      items: [
+        ['math-204', 90, 'Orthogonality & Gram-Schmidt Process'],
+        ['phys-102', 45, "Faraday's Law Lab Data Analysis"],
+        ['hum-110', 45, 'Groundwork Section II Annotations'],
+      ],
+    }, // 180 min (3.0h)
+    {
+      dayOffset: 0,
+      items: [
+        ['cs-301', 50, 'DP Problem Set Q4–Q7 Deep Work'],
+        ['math-204', 45, 'Eigenvalue Decomposition Lecture Review'],
+        ['phys-102', 40, 'Electromagnetic Induction Lab Draft'],
+      ],
+    }, // 135 min (2h 15m)
   ];
 
   const sessions = sessionPlan.flatMap(({ dayOffset, items }) =>
-    items.map(([subjectId, durationMinutes], index) => ({
-      id: `session-seed-${dayOffset + 3}-${index + 1}`,
-      type: 'focus',
-      date: toDateKey(at(dayOffset, 0, 0)),
-      subjectId,
-      taskId: null,
-      durationMinutes,
-      startedAt: at(dayOffset, 9 + index * 3, 0).toISOString(),
-    })),
+    items.map(([subjectId, durationMinutes, title], index) => {
+      const startObj = at(dayOffset, 9 + index * 3, 0);
+      return {
+        id: `session-seed-${dayOffset + 6}-${index + 1}`,
+        type: 'focus',
+        mode: durationMinutes >= 50 ? 'deep' : 'pomodoro',
+        title,
+        date: toDateKey(at(dayOffset, 0, 0)),
+        subjectId,
+        taskId: null,
+        durationMinutes,
+        startedAt: startObj.toISOString(),
+        timestamp: startObj.toISOString(),
+        completedAt: startObj.getTime() + durationMinutes * 60_000,
+      };
+    }),
   );
 
   const todayKey = toDateKey(now);
