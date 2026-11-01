@@ -4941,6 +4941,8 @@ async function init() {
   setInterval(renderHeader, 60_000); // keep greeting/date right across the day
   bindEvents();
 
+  let storageAvailable = false;
+
   try {
     await initDB();
     const [subjects, tasks, sessions, blocks, events] = await Promise.all([
@@ -4955,8 +4957,19 @@ async function init() {
     if (!state.focus.subjectId && subjects.length > 0) {
       state.focus.subjectId = defaultSubjectId();
     }
+    storageAvailable = true;
     setStorageStatus(true);
+  } catch (error) {
+    console.error('StudyOS: IndexedDB initialization failed —', error);
+    setStorageStatus(false);
+    showToast('Local storage is unavailable, so changes cannot be saved.', {
+      tone: 'error',
+      duration: 6000,
+    });
+    rejectReady(error);
+  }
 
+  try {
     renderSubjects();
     populateSubjectSelects();
     renderSubjectsView();
@@ -4968,25 +4981,18 @@ async function init() {
     renderAnalyticsView();
     renderMetrics();
     renderPlannedBlocks();
-
     applyHashRoute({ updateHash: false });
+  } catch (renderError) {
+    console.error('StudyOS: UI render error during init —', renderError);
+  }
 
-    await ensureTodaysPlan();
+  if (storageAvailable) {
+    try {
+      await ensureTodaysPlan();
+    } catch (planError) {
+      console.error('StudyOS: ensureTodaysPlan error —', planError);
+    }
     resolveReady();
-  } catch (error) {
-    console.error('StudyOS: IndexedDB initialization failed —', error);
-    setStorageStatus(false);
-    populateSubjectSelects();
-    renderSubjectsView();
-    renderTaskList();
-    renderTasksView();
-    renderFocusView();
-    renderCalendarView();
-    renderAnalyticsView();
-    renderPlannedBlocks();
-    applyHashRoute({ updateHash: false });
-    showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });
-    rejectReady(error);
   }
 }
 

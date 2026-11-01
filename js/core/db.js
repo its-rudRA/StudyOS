@@ -17,7 +17,7 @@
  */
 
 const DB_NAME = 'StudyOS_DB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const STORES = Object.freeze({
   SUBJECTS: 'subjects',
@@ -197,7 +197,39 @@ function ensureStoreAndIndexes(db, tx, storeName, indexes = []) {
   }
 }
 
-function openDatabase() {
+function applySchemaUpgrade(event) {
+  const req = event.target;
+  const db = req.result;
+  const tx = req.transaction;
+
+  db.onversionchange = () => {
+    db.close();
+    dbPromise = null;
+  };
+
+  ensureStoreAndIndexes(db, tx, STORES.SUBJECTS, []);
+  ensureStoreAndIndexes(db, tx, STORES.TASKS, [
+    { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+    { name: 'completed', keyPath: 'completedFlag', options: { unique: false } },
+    { name: 'dueDate', keyPath: 'dueDate', options: { unique: false } },
+  ]);
+  ensureStoreAndIndexes(db, tx, STORES.SESSIONS, [
+    { name: 'date', keyPath: 'date', options: { unique: false } },
+    { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+  ]);
+  ensureStoreAndIndexes(db, tx, STORES.SCHEDULE_BLOCKS, []);
+  ensureStoreAndIndexes(db, tx, STORES.EVENTS, [
+    { name: 'date', keyPath: 'date', options: { unique: false } },
+    { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
+    { name: 'type', keyPath: 'type', options: { unique: false } },
+  ]);
+}
+
+function hasAllRequiredStores(db) {
+  return Object.values(STORES).every((storeName) => db.objectStoreNames.contains(storeName));
+}
+
+function openDatabase(requestedVersion = DB_VERSION) {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in globalThis)) {
       const err = new Error('IndexedDB is not available in this environment.');
@@ -216,41 +248,52 @@ function openDatabase() {
       }
     };
 
+    const finalizeAndVerify = (db) => {
+      if (!hasAllRequiredStores(db)) {
+        const nextVersion = Math.max(Number(db.version) || DB_VERSION, DB_VERSION) + 1;
+        console.warn(
+          `StudyOS: Missing object store(s) detected on DB v${db.version}. Upgrading to v${nextVersion}...`,
+        );
+        db.close();
+        try {
+          const upgradeReq = indexedDB.open(DB_NAME, nextVersion);
+          upgradeReq.onupgradeneeded = applySchemaUpgrade;
+          upgradeReq.onsuccess = () => {
+            const upgradedDb = upgradeReq.result;
+            upgradedDb.onversionchange = () => {
+              upgradedDb.close();
+              dbPromise = null;
+            };
+            resolve(upgradedDb);
+          };
+          upgradeReq.onerror = () => {
+            console.error('StudyOS: secondary schema upgrade failed —', upgradeReq.error);
+            reject(upgradeReq.error);
+          };
+        } catch (upgradeErr) {
+          console.error('StudyOS: secondary schema upgrade threw —', upgradeErr);
+          reject(upgradeErr);
+        }
+        return;
+      }
+
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+
     let request;
     try {
-      request = indexedDB.open(DB_NAME, DB_VERSION);
+      request = indexedDB.open(DB_NAME, requestedVersion);
     } catch (err) {
       console.error('StudyOS: indexedDB.open threw synchronously —', err);
       reject(err);
       return;
     }
 
-    request.onupgradeneeded = (event) => {
-      const db = request.result;
-      const tx = event.target?.transaction ?? request.transaction;
-
-      db.onversionchange = () => {
-        db.close();
-        dbPromise = null;
-      };
-
-      ensureStoreAndIndexes(db, tx, STORES.SUBJECTS, []);
-      ensureStoreAndIndexes(db, tx, STORES.TASKS, [
-        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
-        { name: 'completed', keyPath: 'completedFlag', options: { unique: false } },
-        { name: 'dueDate', keyPath: 'dueDate', options: { unique: false } },
-      ]);
-      ensureStoreAndIndexes(db, tx, STORES.SESSIONS, [
-        { name: 'date', keyPath: 'date', options: { unique: false } },
-        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
-      ]);
-      ensureStoreAndIndexes(db, tx, STORES.SCHEDULE_BLOCKS, []);
-      ensureStoreAndIndexes(db, tx, STORES.EVENTS, [
-        { name: 'date', keyPath: 'date', options: { unique: false } },
-        { name: 'subjectId', keyPath: 'subjectId', options: { unique: false } },
-        { name: 'type', keyPath: 'type', options: { unique: false } },
-      ]);
-    };
+    request.onupgradeneeded = applySchemaUpgrade;
 
     request.onblocked = () => {
       console.warn(
@@ -259,7 +302,6 @@ function openDatabase() {
       clearBlockTimer();
       blockTimer = setTimeout(() => {
         if (settled) return;
-        // Fallback: open without explicit version so existing v1/v2 connection still works
         try {
           const fallbackReq = indexedDB.open(DB_NAME);
           fallbackReq.onsuccess = () => {
@@ -268,12 +310,7 @@ function openDatabase() {
               return;
             }
             settled = true;
-            const db = fallbackReq.result;
-            db.onversionchange = () => {
-              db.close();
-              dbPromise = null;
-            };
-            resolve(db);
+            finalizeAndVerify(fallbackReq.result);
           };
           fallbackReq.onerror = () => {
             if (settled) return;
@@ -294,19 +331,29 @@ function openDatabase() {
       clearBlockTimer();
       if (settled) return;
       settled = true;
-      const db = request.result;
-      // Let any future schema upgrade in another tab proceed instead of blocking it.
-      db.onversionchange = () => {
-        db.close();
-        dbPromise = null;
-      };
-      resolve(db);
+      finalizeAndVerify(request.result);
     };
 
     request.onerror = () => {
       clearBlockTimer();
       if (settled) return;
       settled = true;
+      // Handle VersionError if browser already has a higher version than requestedVersion
+      if (request.error && request.error.name === 'VersionError') {
+        try {
+          const currentVerReq = indexedDB.open(DB_NAME);
+          currentVerReq.onsuccess = () => {
+            finalizeAndVerify(currentVerReq.result);
+          };
+          currentVerReq.onerror = () => {
+            console.error('StudyOS: VersionError fallback open failed —', currentVerReq.error);
+            reject(currentVerReq.error);
+          };
+          return;
+        } catch (verErr) {
+          console.error('StudyOS: VersionError fallback threw —', verErr);
+        }
+      }
       console.error('StudyOS: IndexedDB open error —', request.error);
       reject(request.error);
     };
@@ -482,6 +529,9 @@ export function initDB() {
 
 async function getAll(storeName) {
   const db = await initDB();
+  if (!db.objectStoreNames.contains(storeName)) {
+    return [];
+  }
   return promisify(db.transaction(storeName, 'readonly').objectStore(storeName).getAll());
 }
 
