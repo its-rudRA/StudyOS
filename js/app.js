@@ -24,6 +24,11 @@ import {
   deleteSession,
   getScheduleBlocks,
   saveScheduleBlocks,
+  getAllEvents,
+  addEvent,
+  updateEvent,
+  deleteEvent,
+  EVENT_TYPES,
   toDateKey,
   normalizeDueDateString,
   formatDueLabelFromDate,
@@ -59,6 +64,14 @@ const PRIORITY_META = Object.freeze({
   low: { label: 'Low', badge: 'priority-badge--low' },
 });
 
+const EVENT_TYPE_META = Object.freeze({
+  exam: { label: 'Exam', badgeClass: 'calendar-type-badge--exam' },
+  assignment: { label: 'Assignment', badgeClass: 'calendar-type-badge--assignment' },
+  lab: { label: 'Lab', badgeClass: 'calendar-type-badge--lab' },
+  milestone: { label: 'Milestone', badgeClass: 'calendar-type-badge--milestone' },
+  task: { label: 'Task', badgeClass: 'calendar-type-badge--task' },
+});
+
 const ICON_CHECK =
   '<svg class="block-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-label="Completed" role="img"><path d="M20 6 9 17l-5-5"/></svg>';
 
@@ -72,12 +85,15 @@ const ICON_EDIT =
    State
    ========================================================================== */
 
+const initialNow = new Date();
+
 const state = {
-  view: 'dashboard', // 'dashboard' | 'subjects' | 'tasks' | 'focus'
+  view: 'dashboard', // 'dashboard' | 'subjects' | 'tasks' | 'focus' | 'calendar'
   subjects: [],
   tasks: [],
   sessions: [],
   blocks: [],
+  events: [],
   filter: 'all', // 'all' | 'pending' | 'completed' (dashboard)
   subjectId: null, // sidebar subject filter
   tasksFilter: {
@@ -93,6 +109,12 @@ const state = {
     subjectId: null,
     muted: false,
     zenMode: false,
+  },
+  calendar: {
+    year: initialNow.getFullYear(),
+    month: initialNow.getMonth(),
+    selectedDate: toDateKey(initialNow),
+    category: 'all', // 'all' | 'exam' | 'assignment' | 'lab' | 'task'
   },
 };
 
@@ -262,6 +284,214 @@ function renderMetrics() {
   if (refs.focusTodayTotalPill) {
     refs.focusTodayTotalPill.textContent = `${formattedFocus} logged today`;
   }
+
+  renderDashboardDeadlinesAndExam();
+}
+
+/**
+ * Returns the integer number of calendar days from `now` (midnight) to `dateStr` (YYYY-MM-DD).
+ * Returns null if `dateStr` is invalid.
+ */
+function daysFromToday(dateStr, now = new Date()) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return null;
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  if (Number.isNaN(target.getTime())) return null;
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target.getTime() - todayStart.getTime()) / 86_400_000);
+}
+
+function formatShortDate(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return String(dateStr || '');
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return String(dateStr);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function formatCountdownPillText(diffDays) {
+  if (diffDays === null) return '';
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'in 1d';
+  if (diffDays > 1) return `in ${diffDays}d`;
+  if (diffDays === -1) return '1d ago';
+  return `${Math.abs(diffDays)}d ago`;
+}
+
+function renderDashboardDeadlinesAndExam() {
+  const now = new Date();
+  const priorityRank = { high: 3, medium: 2, low: 1 };
+
+  const upcomingEvents = state.events
+    .map((ev) => ({ ...ev, diffDays: daysFromToday(ev.date, now) }))
+    .filter((ev) => ev.diffDays !== null && ev.diffDays >= 0)
+    .sort(
+      (a, b) =>
+        a.diffDays - b.diffDays ||
+        (priorityRank[b.priority] ?? 2) - (priorityRank[a.priority] ?? 2) ||
+        String(a.title).localeCompare(String(b.title)),
+    );
+
+  if (refs.badgeCalendar) {
+    refs.badgeCalendar.textContent = String(upcomingEvents.length);
+  }
+
+  // 1. Live Dashboard "Next Exam" Card
+  const upcomingExams = upcomingEvents.filter((ev) => ev.type === 'exam');
+  const nextMilestone = upcomingExams[0] ?? upcomingEvents[0] ?? null;
+
+  if (refs.nextExamTag && refs.nextExamLabel && refs.nextExamCountdown && refs.nextExamMeta) {
+    if (nextMilestone) {
+      const subject = getSubject(nextMilestone.subjectId);
+      const priorityMeta = PRIORITY_META[nextMilestone.priority] ?? PRIORITY_META.high;
+      const diff = nextMilestone.diffDays;
+
+      refs.nextExamTag.className = `course-tag${subject ? ` course-tag--${subject.tone}` : ''}`;
+      refs.nextExamTag.textContent = subject ? subject.code : 'GEN';
+
+      let cleanLabel = nextMilestone.title;
+      if (subject && cleanLabel.toUpperCase().startsWith(subject.code.toUpperCase())) {
+        const stripped = cleanLabel.slice(subject.code.length).replace(/^[\s—–-]+/, '').trim();
+        if (stripped) cleanLabel = stripped;
+      }
+      refs.nextExamLabel.textContent = cleanLabel;
+
+      if (refs.nextExamPriority) {
+        refs.nextExamPriority.hidden = false;
+        refs.nextExamPriority.className = `priority-badge ${priorityMeta.badge}`;
+        refs.nextExamPriority.textContent = priorityMeta.label;
+      }
+
+      const daysSpan = createEl('span', 'metric-big', String(diff));
+      daysSpan.id = 'metric-exam-days';
+      refs.metricExamDays = daysSpan;
+
+      if (diff === 0) {
+        refs.nextExamCountdown.replaceChildren(
+          document.createTextNode('Today ('),
+          daysSpan,
+          document.createTextNode('d)'),
+        );
+      } else if (diff === 1) {
+        refs.nextExamCountdown.replaceChildren(
+          document.createTextNode('in '),
+          daysSpan,
+          document.createTextNode(' Day'),
+        );
+      } else {
+        refs.nextExamCountdown.replaceChildren(
+          document.createTextNode('in '),
+          daysSpan,
+          document.createTextNode(' Days'),
+        );
+      }
+
+      const metaParts = [formatShortDate(nextMilestone.date)];
+      if (nextMilestone.timeLabel) metaParts.push(nextMilestone.timeLabel);
+      if (nextMilestone.location) metaParts.push(nextMilestone.location);
+      refs.nextExamMeta.textContent = metaParts.join(' • ');
+    } else {
+      refs.nextExamTag.className = 'course-tag';
+      refs.nextExamTag.textContent = 'NONE';
+      refs.nextExamLabel.textContent = 'No Upcoming Exams';
+      if (refs.nextExamPriority) refs.nextExamPriority.hidden = true;
+
+      const daysSpan = createEl('span', 'metric-big', '0');
+      daysSpan.id = 'metric-exam-days';
+      refs.metricExamDays = daysSpan;
+      refs.nextExamCountdown.replaceChildren(daysSpan, document.createTextNode(' Scheduled'));
+      refs.nextExamMeta.textContent = 'Add an exam or milestone in Academic Calendar';
+    }
+  }
+
+  // 2. Live Dashboard "Upcoming Deadlines & Exams" List
+  if (!refs.dashboardDeadlineList) return;
+
+  const combinedItems = upcomingEvents.map((ev) => ({
+    id: ev.id,
+    kind: 'event',
+    type: ev.type,
+    title: ev.title,
+    subjectId: ev.subjectId,
+    date: ev.date,
+    diffDays: ev.diffDays,
+    timeLabel: ev.timeLabel || 'All Day',
+    priority: ev.priority || 'medium',
+  }));
+
+  const eventSignatures = new Set(
+    combinedItems.map((item) => `${item.date}::${item.title.toLowerCase().trim()}`),
+  );
+
+  for (const task of state.tasks) {
+    if (task.completed || !task.dueDate) continue;
+    const diff = daysFromToday(task.dueDate, now);
+    if (diff === null || diff < 0) continue;
+    const sig = `${task.dueDate}::${task.title.toLowerCase().trim()}`;
+    if (eventSignatures.has(sig)) continue;
+    combinedItems.push({
+      id: task.id,
+      kind: 'task',
+      type: 'task',
+      title: task.title,
+      subjectId: task.subjectId,
+      date: task.dueDate,
+      diffDays: diff,
+      timeLabel: task.dueLabel || '11:59 PM',
+      priority: task.priority || 'medium',
+    });
+  }
+
+  combinedItems.sort(
+    (a, b) =>
+      a.diffDays - b.diffDays ||
+      (a.type === 'exam' ? -1 : b.type === 'exam' ? 1 : 0) ||
+      (priorityRank[b.priority] ?? 2) - (priorityRank[a.priority] ?? 2) ||
+      String(a.title).localeCompare(String(b.title)),
+  );
+
+  const topItems = combinedItems.slice(0, 5);
+
+  if (topItems.length === 0) {
+    const emptyLi = createEl('li', 'empty-state empty-state--compact');
+    emptyLi.append(
+      createEl('p', 'empty-state-title', 'No upcoming deadlines'),
+      createEl('p', 'empty-state-hint', 'Add an exam or milestone in Academic Calendar.'),
+    );
+    refs.dashboardDeadlineList.replaceChildren(emptyLi);
+    return;
+  }
+
+  const nodes = topItems.map((item) => {
+    const subject = getSubject(item.subjectId);
+    const tone = subject ? subject.tone : 'blue';
+    const li = createEl('li', 'deadline-item');
+    li.dataset.tone = tone;
+    li.dataset.date = item.date;
+
+    const info = createEl('div', 'deadline-info');
+    const titleEl = createEl('p', 'deadline-title', item.title);
+    const metaEl = createEl('p', 'deadline-meta');
+    const courseTag = createEl(
+      'span',
+      `course-tag${subject ? ` course-tag--${subject.tone}` : ''}`,
+      subject ? subject.code : 'GEN',
+    );
+    metaEl.append(courseTag, document.createTextNode(` ${formatShortDate(item.date)} • ${item.timeLabel}`));
+    info.append(titleEl, metaEl);
+
+    const isUrgent = item.diffDays <= 4 || (item.type === 'exam' && item.diffDays <= 6);
+    const pill = createEl(
+      'span',
+      `countdown-pill${isUrgent ? ' countdown-pill--urgent' : ''}`,
+      formatCountdownPillText(item.diffDays),
+    );
+
+    li.append(info, pill);
+    return li;
+  });
+
+  refs.dashboardDeadlineList.replaceChildren(...nodes);
 }
 
 /** Tasks narrowed by the sidebar subject filter only (what the filter tabs count). */
@@ -381,6 +611,7 @@ const VIEW_SECTION_MAP = Object.freeze({
   subjects: 'subjects-view',
   tasks: 'tasks-view',
   focus: 'focus-view',
+  calendar: 'calendar-view',
 });
 
 const WORKSPACE_SECTION_IDS = Object.freeze([
@@ -393,7 +624,6 @@ const WORKSPACE_SECTION_IDS = Object.freeze([
 ]);
 
 const UPCOMING_VIEW_LABELS = Object.freeze({
-  calendar: 'Academic Calendar',
   analytics: 'Analytics',
 });
 
@@ -457,12 +687,16 @@ function switchView(viewName, { updateHash = true } = {}) {
     renderTasksView();
   } else if (viewName === 'focus') {
     renderFocusView();
+  } else if (viewName === 'calendar') {
+    populateSubjectSelects();
+    renderCalendarView();
   }
 }
 
 function resolveRouteFromHash(rawHash = window.location.hash) {
   const clean = String(rawHash || '').replace(/^#/, '').trim().toLowerCase();
   if (clean === 'focus' || clean === 'focus-view') return { view: 'focus', subjectId: null };
+  if (clean === 'calendar' || clean === 'calendar-view') return { view: 'calendar', subjectId: null };
   if (clean === 'subjects' || clean === 'subjects-view') return { view: 'subjects', subjectId: null };
   if (clean === 'tasks' || clean === 'tasks-view') return { view: 'tasks', subjectId: null };
   if (clean.startsWith('subject-')) {
@@ -734,6 +968,7 @@ async function handleSubjectFormSubmit(event) {
     renderTaskList();
     renderTasksView();
     renderFocusView();
+    renderCalendarView();
     renderMetrics();
     closeSubjectModal();
 
@@ -766,9 +1001,14 @@ async function handleDeleteSubject(subjectId) {
 
   try {
     await deleteSubject(subject.id);
-    const [subjects, tasks] = await Promise.all([getAllSubjects(), getAllTasks()]);
+    const [subjects, tasks, events] = await Promise.all([
+      getAllSubjects(),
+      getAllTasks(),
+      getAllEvents(),
+    ]);
     state.subjects = subjects;
     state.tasks = tasks;
+    state.events = events;
 
     if (state.subjectId === subject.id) {
       state.subjectId = null;
@@ -798,6 +1038,7 @@ async function handleDeleteSubject(subjectId) {
     renderTaskList();
     renderTasksView();
     renderFocusView();
+    renderCalendarView();
     renderMetrics();
 
     showToast(`Deleted "${subject.code} — ${subject.name}"`);
@@ -996,8 +1237,9 @@ function populateSubjectSelects() {
     refs.tasksSubjectFilter.value = state.tasksFilter.subjectId;
   }
 
-  if (refs.taskSubjectSelect) {
-    const currentVal = refs.taskSubjectSelect.value;
+  for (const selectEl of [refs.taskSubjectSelect, refs.eventSubjectSelect]) {
+    if (!selectEl) continue;
+    const currentVal = selectEl.value;
     const modalOptions = [];
     for (const subject of state.subjects) {
       const opt = createEl('option', '', `${subject.code} — ${subject.name}`);
@@ -1008,9 +1250,9 @@ function populateSubjectSelects() {
     genOpt.value = '';
     modalOptions.push(genOpt);
 
-    refs.taskSubjectSelect.replaceChildren(...modalOptions);
+    selectEl.replaceChildren(...modalOptions);
     if (modalOptions.some((opt) => opt.value === currentVal)) {
-      refs.taskSubjectSelect.value = currentVal;
+      selectEl.value = currentVal;
     }
   }
 }
@@ -1309,6 +1551,7 @@ async function handleTaskFormSubmit(event) {
       renderTasksView({ highlightId: saved.id });
       renderSubjectsView();
       renderFocusView();
+      renderCalendarView();
       renderMetrics();
       closeTaskModal();
 
@@ -1487,6 +1730,7 @@ async function toggleTask(id, checkbox = null) {
   renderCounts();
   renderSubjectsView();
   renderFocusView();
+  renderCalendarView();
 
   // Let the fade/strikethrough finish, then refresh lists where filtering or sorting changes.
   clearTimeout(listRefreshTimer);
@@ -1532,6 +1776,7 @@ async function removeTask(id) {
   renderCounts();
   renderSubjectsView();
   renderFocusView();
+  renderCalendarView();
   await syncBlocks();
 
   showToast(`Deleted "${task.title}"`, {
@@ -1548,6 +1793,7 @@ async function removeTask(id) {
         renderCounts();
         renderSubjectsView();
         renderFocusView();
+        renderCalendarView();
         await commitBlocks(reconcileBlocks(restoredBlocks, state.tasks));
       } catch (error) {
         console.warn('StudyOS: could not restore task.', error);
@@ -1590,6 +1836,7 @@ async function createTask(fields, { announce = true } = {}) {
   renderMetrics();
   renderSubjectsView();
   renderFocusView();
+  renderCalendarView();
   await syncBlocks();
 
   if (announce) {
@@ -2160,6 +2407,546 @@ function requestFocusSession(task = null) {
 }
 
 /* ==========================================================================
+   Module 4: Academic Calendar (#calendar-view) & Event Modal (#event-modal)
+   ========================================================================== */
+
+function formatLongSelectedDate(dateStr, now = new Date()) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return 'Selected Day';
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return 'Selected Day';
+
+  const diff = daysFromToday(dateStr, now);
+  const formatted = dt.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: dt.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  });
+
+  if (diff === 0) return `Today — ${dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  if (diff === 1) return `Tomorrow — ${dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  return formatted;
+}
+
+function matchesCalendarCategory(item, category = state.calendar.category) {
+  if (!category || category === 'all') return true;
+  if (category === 'exam') return item.type === 'exam';
+  if (category === 'assignment') return item.type === 'assignment' || item.type === 'milestone';
+  if (category === 'lab') return item.type === 'lab';
+  if (category === 'task') return item.type === 'task';
+  return true;
+}
+
+/**
+ * Returns unified calendar items combining `state.events` and `state.tasks` (with valid `dueDate`).
+ */
+function getUnifiedCalendarItems({ applyCategory = true } = {}) {
+  const now = new Date();
+  const priorityRank = { high: 3, medium: 2, low: 1 };
+  const items = [];
+
+  for (const ev of state.events) {
+    if (!ev.date) continue;
+    items.push({
+      uid: `event:${ev.id}`,
+      id: ev.id,
+      kind: 'event',
+      type: EVENT_TYPES.includes(ev.type) ? ev.type : 'exam',
+      title: ev.title,
+      subjectId: ev.subjectId,
+      date: ev.date,
+      diffDays: daysFromToday(ev.date, now),
+      timeLabel: ev.timeLabel || 'All Day',
+      location: ev.location || '',
+      priority: ev.priority || 'medium',
+      notes: ev.notes || '',
+      completed: false,
+      rawEvent: ev,
+    });
+  }
+
+  for (const task of state.tasks) {
+    if (!task.dueDate) continue;
+    items.push({
+      uid: `task:${task.id}`,
+      id: task.id,
+      kind: 'task',
+      type: 'task',
+      title: task.title,
+      subjectId: task.subjectId,
+      date: task.dueDate,
+      diffDays: daysFromToday(task.dueDate, now),
+      timeLabel: task.dueLabel || 'Due 11:59 PM',
+      location: task.completed ? 'Completed' : `${formatDuration(task.durationMinutes || 45)} est.`,
+      priority: task.priority || 'medium',
+      notes: task.notes || '',
+      completed: Boolean(task.completed),
+      rawTask: task,
+    });
+  }
+
+  const filtered = applyCategory
+    ? items.filter((item) => matchesCalendarCategory(item, state.calendar.category))
+    : items;
+
+  filtered.sort(
+    (a, b) =>
+      String(a.date).localeCompare(String(b.date)) ||
+      (a.kind === 'event' && b.kind !== 'event' ? -1 : a.kind !== 'event' && b.kind === 'event' ? 1 : 0) ||
+      (a.type === 'exam' ? -1 : b.type === 'exam' ? 1 : 0) ||
+      (priorityRank[b.priority] ?? 2) - (priorityRank[a.priority] ?? 2) ||
+      String(a.title).localeCompare(String(b.title)),
+  );
+
+  return filtered;
+}
+
+function createCalendarAgendaCard(item, { showDateInMeta = false } = {}) {
+  const subject = getSubject(item.subjectId);
+  const tone = subject ? subject.tone : 'blue';
+  const typeMeta = EVENT_TYPE_META[item.type] ?? EVENT_TYPE_META.milestone;
+
+  const li = createEl(
+    'li',
+    `calendar-agenda-item calendar-agenda-item--${tone}${item.completed ? ' is-completed' : ''}`,
+  );
+  li.dataset.date = item.date;
+  li.dataset.kind = item.kind;
+  li.dataset.itemId = item.id;
+
+  const top = createEl('div', 'calendar-agenda-top');
+  const badges = createEl('div', 'calendar-agenda-badges');
+
+  const courseTag = createEl(
+    'span',
+    `course-tag${subject ? ` course-tag--${subject.tone}` : ''}`,
+    subject ? subject.code : 'GEN',
+  );
+  const typeBadge = createEl('span', `calendar-type-badge ${typeMeta.badgeClass}`, typeMeta.label);
+  badges.append(courseTag, typeBadge);
+
+  const isUrgent =
+    !item.completed &&
+    item.diffDays !== null &&
+    item.diffDays >= 0 &&
+    (item.diffDays <= 4 || (item.type === 'exam' && item.diffDays <= 6));
+  const countdownPill = createEl(
+    'span',
+    `countdown-pill${isUrgent ? ' countdown-pill--urgent' : ''}`,
+    item.completed ? 'Done' : formatCountdownPillText(item.diffDays),
+  );
+
+  top.append(badges, countdownPill);
+
+  const titleEl = createEl('p', 'calendar-agenda-title', item.title);
+
+  const metaParts = [];
+  if (showDateInMeta) metaParts.push(formatShortDate(item.date));
+  if (item.timeLabel) metaParts.push(item.timeLabel);
+  if (item.location) metaParts.push(item.location);
+
+  const metaEl = createEl('p', 'calendar-agenda-meta', metaParts.join(' • '));
+
+  li.append(top, titleEl, metaEl);
+
+  if (item.notes) {
+    li.append(createEl('p', 'calendar-agenda-notes', item.notes));
+  }
+
+  const actions = createEl('div', 'calendar-agenda-actions');
+  if (item.kind === 'event') {
+    const editBtn = createEl('button', 'btn-card-action', 'Edit');
+    editBtn.type = 'button';
+    editBtn.dataset.action = 'edit-event';
+    editBtn.dataset.eventId = item.id;
+
+    const deleteBtn = createEl('button', 'btn-card-action btn-card-action--danger', 'Delete');
+    deleteBtn.type = 'button';
+    deleteBtn.dataset.action = 'delete-event';
+    deleteBtn.dataset.eventId = item.id;
+
+    actions.append(editBtn, deleteBtn);
+  } else if (item.kind === 'task') {
+    if (!item.completed) {
+      const focusBtn = createEl('button', 'btn-card-action', 'Focus ▶');
+      focusBtn.type = 'button';
+      focusBtn.dataset.action = 'focus-calendar-task';
+      focusBtn.dataset.taskId = item.id;
+      actions.append(focusBtn);
+    }
+    const editTaskBtn = createEl('button', 'btn-card-action', 'Edit Task');
+    editTaskBtn.type = 'button';
+    editTaskBtn.dataset.action = 'edit-calendar-task';
+    editTaskBtn.dataset.taskId = item.id;
+    actions.append(editTaskBtn);
+  }
+
+  li.append(actions);
+  return li;
+}
+
+function renderCalendarView() {
+  if (!refs.calendarDaysGrid) return;
+
+  const now = new Date();
+  const todayKey = toDateKey(now);
+  const { year, month, selectedDate, category } = state.calendar;
+
+  // Update summary pill in header
+  if (refs.calendarSummaryPill) {
+    const upcomingEvCount = state.events.filter((ev) => {
+      const d = daysFromToday(ev.date, now);
+      return d !== null && d >= 0;
+    }).length;
+    const pendingTaskDeadlines = state.tasks.filter((t) => !t.completed && t.dueDate).length;
+    refs.calendarSummaryPill.textContent = `${upcomingEvCount} upcoming ${
+      upcomingEvCount === 1 ? 'milestone' : 'milestones'
+    } • ${pendingTaskDeadlines} task ${pendingTaskDeadlines === 1 ? 'deadline' : 'deadlines'}`;
+  }
+
+  // Update Month / Year label
+  if (refs.calendarMonthLabel) {
+    const monthDate = new Date(year, month, 1);
+    refs.calendarMonthLabel.textContent = monthDate.toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    });
+  }
+
+  // Update category filter buttons
+  if (refs.calendarCategoryButtons) {
+    refs.calendarCategoryButtons.forEach((btn) => {
+      const active = btn.dataset.calFilter === category;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  const allVisibleItems = getUnifiedCalendarItems({ applyCategory: true });
+  const itemsByDate = new Map();
+  for (const item of allVisibleItems) {
+    const list = itemsByDate.get(item.date) ?? [];
+    list.push(item);
+    itemsByDate.set(item.date, list);
+  }
+
+  // Build 42-cell Monday-Sunday month grid
+  const firstDayOfMonth = new Date(year, month, 1);
+  const mondayOffset = (firstDayOfMonth.getDay() + 6) % 7; // Mon=0 .. Sun=6
+  const cells = [];
+
+  for (let i = 0; i < 42; i += 1) {
+    const cellDate = new Date(year, month, 1 - mondayOffset + i);
+    const dateKey = toDateKey(cellDate);
+    const isOutside = cellDate.getMonth() !== month;
+    const isToday = dateKey === todayKey;
+    const isSelected = dateKey === selectedDate;
+    const dayItems = itemsByDate.get(dateKey) ?? [];
+
+    const cell = createEl(
+      'div',
+      `calendar-day-cell${isOutside ? ' is-outside' : ''}${isToday ? ' is-today' : ''}${
+        isSelected ? ' is-selected' : ''
+      }`,
+    );
+    cell.setAttribute('role', 'gridcell');
+    cell.setAttribute('tabindex', isSelected ? '0' : '-1');
+    cell.setAttribute('aria-selected', String(isSelected));
+    cell.dataset.date = dateKey;
+
+    const topRow = createEl('div', 'calendar-day-top');
+    topRow.append(createEl('span', 'calendar-day-num', String(cellDate.getDate())));
+    if (isToday) {
+      topRow.append(createEl('span', 'calendar-today-tag', 'Today'));
+    }
+    cell.append(topRow);
+
+    const eventsWrap = createEl('div', 'calendar-day-events');
+    const maxPills = 3;
+    dayItems.slice(0, maxPills).forEach((item) => {
+      const subject = getSubject(item.subjectId);
+      const tone = subject ? subject.tone : 'blue';
+      const pill = createEl(
+        'div',
+        `calendar-pill calendar-pill--${tone}${item.type === 'exam' ? ' calendar-pill--exam' : ''}${
+          item.completed ? ' is-completed' : ''
+        }`,
+      );
+      const dot = createEl('span', 'calendar-pill-dot');
+      dot.setAttribute('aria-hidden', 'true');
+      const shortPrefix = subject ? `${subject.code} ` : '';
+      const labelText = item.title.toUpperCase().startsWith(shortPrefix.trim().toUpperCase())
+        ? item.title
+        : `${shortPrefix}${item.title}`;
+      const textSpan = createEl('span', 'calendar-pill-text', labelText);
+      pill.append(dot, textSpan);
+      eventsWrap.append(pill);
+    });
+
+    if (dayItems.length > maxPills) {
+      eventsWrap.append(createEl('span', 'calendar-more-pill', `+${dayItems.length - maxPills} more`));
+    }
+
+    cell.append(eventsWrap);
+    cells.push(cell);
+  }
+
+  refs.calendarDaysGrid.replaceChildren(...cells);
+
+  // Render Right Column Card 1: Selected Day Agenda
+  const selectedDayItems = itemsByDate.get(selectedDate) ?? [];
+  if (refs.calendarSelectedDayTitle) {
+    refs.calendarSelectedDayTitle.textContent = formatLongSelectedDate(selectedDate, now);
+  }
+  if (refs.calendarSelectedDayMeta) {
+    refs.calendarSelectedDayMeta.textContent =
+      selectedDayItems.length === 0
+        ? 'No exams, milestones, or task deadlines on this date'
+        : `${selectedDayItems.length} scheduled ${selectedDayItems.length === 1 ? 'item' : 'items'}`;
+  }
+
+  if (refs.calendarSelectedDayList) {
+    if (selectedDayItems.length === 0) {
+      const emptyLi = createEl('li', 'empty-state empty-state--compact');
+      emptyLi.append(
+        createEl('p', 'empty-state-title', `Nothing scheduled for ${formatShortDate(selectedDate)}`),
+        createEl('p', 'empty-state-hint', 'Add an exam, assignment, or lab milestone for this day.'),
+      );
+      const addDayBtn = createEl('button', 'btn-ghost', `+ Add Event on ${formatShortDate(selectedDate)}`);
+      addDayBtn.type = 'button';
+      addDayBtn.dataset.action = 'add-event-on-selected-day';
+      emptyLi.append(addDayBtn);
+      refs.calendarSelectedDayList.replaceChildren(emptyLi);
+    } else {
+      refs.calendarSelectedDayList.replaceChildren(
+        ...selectedDayItems.map((item) => createCalendarAgendaCard(item, { showDateInMeta: false })),
+      );
+    }
+  }
+
+  // Render Right Column Card 2: Upcoming Milestones (Next 14 Days + upcoming academic events)
+  const upcomingItems = allVisibleItems.filter((item) => {
+    if (item.completed) return false;
+    if (item.diffDays === null || item.diffDays < 0) return false;
+    return item.kind === 'event' || item.diffDays <= 14;
+  });
+
+  if (refs.calendarUpcomingCount) {
+    refs.calendarUpcomingCount.textContent = String(upcomingItems.length);
+  }
+
+  if (refs.calendarUpcomingList) {
+    if (upcomingItems.length === 0) {
+      const emptyUpcoming = createEl('li', 'empty-state empty-state--compact');
+      emptyUpcoming.append(
+        createEl('p', 'empty-state-title', 'No upcoming milestones'),
+        createEl('p', 'empty-state-hint', 'Use "+ Add Event / Exam" to schedule upcoming assessments.'),
+      );
+      refs.calendarUpcomingList.replaceChildren(emptyUpcoming);
+    } else {
+      refs.calendarUpcomingList.replaceChildren(
+        ...upcomingItems.map((item) => createCalendarAgendaCard(item, { showDateInMeta: true })),
+      );
+    }
+  }
+}
+
+function selectCalendarDate(dateKey, { syncMonth = true } = {}) {
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return;
+  state.calendar.selectedDate = dateKey;
+  if (syncMonth) {
+    const [y, m] = dateKey.split('-').map(Number);
+    state.calendar.year = y;
+    state.calendar.month = m - 1;
+  }
+  renderCalendarView();
+}
+
+function shiftCalendarMonth(deltaMonths) {
+  const shifted = new Date(state.calendar.year, state.calendar.month + deltaMonths, 1);
+  state.calendar.year = shifted.getFullYear();
+  state.calendar.month = shifted.getMonth();
+  renderCalendarView();
+}
+
+function jumpCalendarToToday() {
+  const now = new Date();
+  state.calendar.year = now.getFullYear();
+  state.calendar.month = now.getMonth();
+  state.calendar.selectedDate = toDateKey(now);
+  renderCalendarView();
+}
+
+function showEventFormError(message) {
+  if (!refs.eventFormError) return;
+  if (!message) {
+    refs.eventFormError.textContent = '';
+    refs.eventFormError.hidden = true;
+  } else {
+    refs.eventFormError.textContent = message;
+    refs.eventFormError.hidden = false;
+  }
+}
+
+function openEventModal({ eventItem = null, defaultDate = null } = {}) {
+  if (!refs.eventModal || !refs.eventForm) return;
+
+  populateSubjectSelects();
+
+  const isEdit = Boolean(eventItem && eventItem.id);
+  refs.eventModalTitle.textContent = isEdit ? 'Edit Academic Event' : 'Add Academic Event / Exam';
+  refs.eventSaveBtn.textContent = isEdit ? 'Save Changes' : 'Save Event';
+
+  refs.eventIdInput.value = isEdit ? eventItem.id : '';
+  refs.eventTitleInput.value = isEdit ? eventItem.title : '';
+  refs.eventTypeSelect.value =
+    isEdit && EVENT_TYPES.includes(eventItem.type) ? eventItem.type : 'exam';
+  refs.eventSubjectSelect.value = isEdit ? eventItem.subjectId ?? '' : defaultSubjectId() ?? '';
+
+  const fallbackDate = defaultDate || state.calendar.selectedDate || toDateKey(new Date());
+  refs.eventDateInput.value = isEdit ? normalizeDueDateString(eventItem.date) : fallbackDate;
+  refs.eventTimeInput.value = isEdit ? eventItem.timeLabel ?? '' : '10:00 AM';
+  refs.eventLocationInput.value = isEdit ? eventItem.location ?? '' : '';
+
+  const selectedPriority =
+    isEdit && PRIORITY_META[eventItem.priority] ? eventItem.priority : 'high';
+  const priorityRadio = refs.eventForm.querySelector(
+    `input[name="eventPriority"][value="${selectedPriority}"]`,
+  );
+  if (priorityRadio) priorityRadio.checked = true;
+
+  refs.eventNotesInput.value = isEdit ? eventItem.notes ?? '' : '';
+  showEventFormError('');
+
+  if (typeof refs.eventModal.showModal === 'function') {
+    if (!refs.eventModal.open) refs.eventModal.showModal();
+  } else {
+    refs.eventModal.setAttribute('open', '');
+  }
+
+  refs.eventTitleInput.focus();
+  if (isEdit) refs.eventTitleInput.select();
+}
+
+function closeEventModal() {
+  if (!refs.eventModal) return;
+  showEventFormError('');
+  if (typeof refs.eventModal.close === 'function' && refs.eventModal.open) {
+    refs.eventModal.close();
+  } else {
+    refs.eventModal.removeAttribute('open');
+  }
+}
+
+async function handleEventFormSubmit(event) {
+  event.preventDefault();
+
+  const editingId = refs.eventIdInput.value.trim();
+  const title = refs.eventTitleInput.value.trim();
+  const type = EVENT_TYPES.includes(refs.eventTypeSelect.value) ? refs.eventTypeSelect.value : 'exam';
+  const subjectId = refs.eventSubjectSelect.value || null;
+  const rawDate = refs.eventDateInput.value;
+  const timeLabel = refs.eventTimeInput.value.trim() || 'All Day';
+  const location = refs.eventLocationInput.value.trim();
+  const checkedPriority = refs.eventForm.querySelector('input[name="eventPriority"]:checked');
+  const priority =
+    checkedPriority && PRIORITY_META[checkedPriority.value] ? checkedPriority.value : 'high';
+  const notes = refs.eventNotesInput.value.trim();
+
+  if (!title) {
+    showEventFormError('Please enter an event or exam title.');
+    refs.eventTitleInput.focus();
+    return;
+  }
+
+  if (!rawDate) {
+    showEventFormError('Please choose a valid date.');
+    refs.eventDateInput.focus();
+    return;
+  }
+
+  const date = normalizeDueDateString(rawDate);
+
+  refs.eventSaveBtn.disabled = true;
+  try {
+    let saved;
+    if (editingId) {
+      saved = await updateEvent({
+        id: editingId,
+        title,
+        type,
+        subjectId,
+        date,
+        timeLabel,
+        location,
+        priority,
+        notes,
+      });
+    } else {
+      saved = await addEvent({
+        title,
+        type,
+        subjectId,
+        date,
+        timeLabel,
+        location,
+        priority,
+        notes,
+      });
+    }
+
+    state.events = await getAllEvents();
+    selectCalendarDate(saved.date, { syncMonth: true });
+    renderMetrics();
+    closeEventModal();
+
+    const subject = getSubject(saved.subjectId);
+    showToast(
+      `${editingId ? 'Updated' : 'Scheduled'} "${saved.title}" · ${
+        subject ? subject.code : 'GEN'
+      } (${formatShortDate(saved.date)})`,
+    );
+  } catch (error) {
+    console.warn('StudyOS: could not save calendar event.', error);
+    showEventFormError('Could not save that event. Please try again.');
+  } finally {
+    refs.eventSaveBtn.disabled = false;
+  }
+}
+
+async function handleDeleteEvent(eventId) {
+  const existing = state.events.find((item) => item.id === eventId);
+  if (!existing) return;
+
+  try {
+    await deleteEvent(eventId);
+    state.events = await getAllEvents();
+    renderMetrics();
+    renderCalendarView();
+
+    showToast(`Deleted "${existing.title}"`, {
+      actionLabel: 'Undo',
+      duration: 6000,
+      onAction: async () => {
+        try {
+          await addEvent(existing);
+          state.events = await getAllEvents();
+          renderMetrics();
+          renderCalendarView();
+        } catch (err) {
+          console.warn('StudyOS: could not restore event.', err);
+          showToast('Could not restore that event.', { tone: 'error' });
+        }
+      },
+    });
+  } catch (error) {
+    console.warn('StudyOS: could not delete event.', error);
+    showToast('Could not delete that event. Please try again.', { tone: 'error' });
+  }
+}
+
+/* ==========================================================================
    Auto-Plan
    ========================================================================== */
 
@@ -2246,6 +3033,46 @@ function handleTaskListChange(event) {
   if (row) toggleTask(row.dataset.taskId, checkbox);
 }
 
+function handleCalendarAgendaClick(event) {
+  const editEventBtn = event.target.closest('[data-action="edit-event"]');
+  if (editEventBtn) {
+    const ev = state.events.find((item) => item.id === editEventBtn.dataset.eventId);
+    if (ev) openEventModal({ eventItem: ev });
+    return;
+  }
+
+  const deleteEventBtn = event.target.closest('[data-action="delete-event"]');
+  if (deleteEventBtn) {
+    handleDeleteEvent(deleteEventBtn.dataset.eventId);
+    return;
+  }
+
+  const focusTaskBtn = event.target.closest('[data-action="focus-calendar-task"]');
+  if (focusTaskBtn) {
+    const task = state.tasks.find((item) => item.id === focusTaskBtn.dataset.taskId);
+    if (task) requestFocusSession(task);
+    return;
+  }
+
+  const editTaskBtn = event.target.closest('[data-action="edit-calendar-task"]');
+  if (editTaskBtn) {
+    const task = state.tasks.find((item) => item.id === editTaskBtn.dataset.taskId);
+    if (task) openTaskModal({ task });
+    return;
+  }
+
+  const addOnSelectedBtn = event.target.closest('[data-action="add-event-on-selected-day"]');
+  if (addOnSelectedBtn) {
+    openEventModal({ defaultDate: state.calendar.selectedDate });
+    return;
+  }
+
+  const agendaCard = event.target.closest('.calendar-agenda-item[data-date]');
+  if (agendaCard && agendaCard.dataset.date) {
+    selectCalendarDate(agendaCard.dataset.date, { syncMonth: true });
+  }
+}
+
 function bindEvents() {
   if (refs.sidebarNav) {
     refs.sidebarNav.addEventListener('click', (event) => {
@@ -2268,6 +3095,91 @@ function bindEvents() {
   if (refs.fullTasksList) {
     refs.fullTasksList.addEventListener('change', handleTaskListChange);
     refs.fullTasksList.addEventListener('click', handleTaskListClick);
+  }
+
+  if (refs.dashboardDeadlineList) {
+    refs.dashboardDeadlineList.addEventListener('click', (event) => {
+      const row = event.target.closest('.deadline-item[data-date]');
+      if (!row) return;
+      selectCalendarDate(row.dataset.date, { syncMonth: true });
+      switchView('calendar');
+    });
+  }
+
+  // Academic Calendar controls & grid
+  if (refs.calendarPrevBtn) {
+    refs.calendarPrevBtn.addEventListener('click', () => shiftCalendarMonth(-1));
+  }
+  if (refs.calendarNextBtn) {
+    refs.calendarNextBtn.addEventListener('click', () => shiftCalendarMonth(1));
+  }
+  if (refs.calendarTodayBtn) {
+    refs.calendarTodayBtn.addEventListener('click', jumpCalendarToToday);
+  }
+  if (refs.calendarAddEventBtn) {
+    refs.calendarAddEventBtn.addEventListener('click', () =>
+      openEventModal({ defaultDate: state.calendar.selectedDate }),
+    );
+  }
+  if (refs.calendarAddSelectedDayBtn) {
+    refs.calendarAddSelectedDayBtn.addEventListener('click', () =>
+      openEventModal({ defaultDate: state.calendar.selectedDate }),
+    );
+  }
+
+  if (refs.calendarCategoryGroup) {
+    refs.calendarCategoryGroup.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-cal-filter]');
+      if (!btn) return;
+      state.calendar.category = btn.dataset.calFilter;
+      renderCalendarView();
+    });
+  }
+
+  if (refs.calendarDaysGrid) {
+    refs.calendarDaysGrid.addEventListener('click', (event) => {
+      const cell = event.target.closest('.calendar-day-cell[data-date]');
+      if (!cell) return;
+      selectCalendarDate(cell.dataset.date, { syncMonth: true });
+    });
+
+    refs.calendarDaysGrid.addEventListener('dblclick', (event) => {
+      const cell = event.target.closest('.calendar-day-cell[data-date]');
+      if (!cell) return;
+      selectCalendarDate(cell.dataset.date, { syncMonth: true });
+      openEventModal({ defaultDate: cell.dataset.date });
+    });
+
+    refs.calendarDaysGrid.addEventListener('keydown', (event) => {
+      const cell = event.target.closest('.calendar-day-cell[data-date]');
+      if (!cell) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectCalendarDate(cell.dataset.date, { syncMonth: true });
+      }
+    });
+  }
+
+  if (refs.calendarSelectedDayList) {
+    refs.calendarSelectedDayList.addEventListener('click', handleCalendarAgendaClick);
+  }
+  if (refs.calendarUpcomingList) {
+    refs.calendarUpcomingList.addEventListener('click', handleCalendarAgendaClick);
+  }
+
+  if (refs.eventForm) {
+    refs.eventForm.addEventListener('submit', handleEventFormSubmit);
+  }
+  if (refs.eventCancelBtn) {
+    refs.eventCancelBtn.addEventListener('click', closeEventModal);
+  }
+  if (refs.eventModalClose) {
+    refs.eventModalClose.addEventListener('click', closeEventModal);
+  }
+  if (refs.eventModal) {
+    refs.eventModal.addEventListener('click', (event) => {
+      if (event.target === refs.eventModal) closeEventModal();
+    });
   }
 
   refs.filterGroup.addEventListener('click', (event) => {
@@ -2560,7 +3472,11 @@ function bindEvents() {
 
     if (isOptN || isCmdOrCtrlN || isPlainN) {
       event.preventDefault();
-      openTaskModal();
+      if (state.view === 'calendar') {
+        openEventModal({ defaultDate: state.calendar.selectedDate });
+      } else {
+        openTaskModal();
+      }
     }
   });
 }
@@ -2756,6 +3672,38 @@ function cacheElements() {
     focusManualTitle: byId('focus-manual-title'),
     focusManualDuration: byId('focus-manual-duration'),
     focusHistoryList: byId('focus-history-list'),
+    calendarView: byId('calendar-view'),
+    calendarSummaryPill: byId('calendar-summary-pill'),
+    calendarPrevBtn: byId('calendar-prev-btn'),
+    calendarTodayBtn: byId('calendar-today-btn'),
+    calendarNextBtn: byId('calendar-next-btn'),
+    calendarMonthLabel: byId('calendar-month-label'),
+    calendarAddEventBtn: byId('calendar-add-event-btn'),
+    calendarCategoryGroup: byId('calendar-category-group'),
+    calendarCategoryButtons: [...document.querySelectorAll('[data-cal-filter]')],
+    calendarDaysGrid: byId('calendar-days-grid'),
+    calendarSelectedDayTitle: byId('calendar-selected-day-title'),
+    calendarSelectedDayMeta: byId('calendar-selected-day-meta'),
+    calendarAddSelectedDayBtn: byId('calendar-add-selected-day-btn'),
+    calendarSelectedDayList: byId('calendar-selected-day-list'),
+    calendarUpcomingTitle: byId('calendar-upcoming-title'),
+    calendarUpcomingCount: byId('calendar-upcoming-count'),
+    calendarUpcomingList: byId('calendar-upcoming-list'),
+    eventModal: byId('event-modal'),
+    eventForm: byId('event-form'),
+    eventModalTitle: byId('event-modal-title'),
+    eventModalClose: byId('event-modal-close'),
+    eventIdInput: byId('event-id-input'),
+    eventTitleInput: byId('event-title-input'),
+    eventTypeSelect: byId('event-type-select'),
+    eventSubjectSelect: byId('event-subject-select'),
+    eventDateInput: byId('event-date-input'),
+    eventTimeInput: byId('event-time-input'),
+    eventLocationInput: byId('event-location-input'),
+    eventNotesInput: byId('event-notes-input'),
+    eventFormError: byId('event-form-error'),
+    eventCancelBtn: byId('event-cancel-btn'),
+    eventSaveBtn: byId('event-save-btn'),
     greeting: byId('greeting-title'),
     dateDisplay: byId('current-date-display'),
     tasksDone: byId('metric-tasks-done'),
@@ -2765,8 +3713,17 @@ function cacheElements() {
     focusLogged: byId('metric-focus-logged'),
     focusBar: byId('metric-focus-bar'),
     focusGoal: byId('metric-focus-goal'),
+    statExamCard: byId('stat-exam-card'),
+    nextExamTag: byId('next-exam-tag'),
+    nextExamLabel: byId('next-exam-label'),
+    nextExamPriority: byId('next-exam-priority'),
+    nextExamCountdown: byId('next-exam-countdown'),
+    metricExamDays: byId('metric-exam-days'),
+    nextExamMeta: byId('next-exam-meta'),
+    dashboardDeadlineList: byId('dashboard-deadline-list'),
     badgeTasks: byId('badge-tasks'),
     badgeSubjects: byId('badge-subjects'),
+    badgeCalendar: byId('badge-calendar'),
     subjectList: byId('pinned-subject-list'),
     taskList: byId('dashboard-task-list'),
     filterGroup: document.querySelector('.segmented'),
@@ -2803,14 +3760,15 @@ async function init() {
 
   try {
     await initDB();
-    const [subjects, tasks, sessions, blocks] = await Promise.all([
+    const [subjects, tasks, sessions, blocks, events] = await Promise.all([
       getAllSubjects(),
       getAllTasks(),
       getAllSessions(),
       getScheduleBlocks(),
+      getAllEvents(),
     ]);
 
-    Object.assign(state, { subjects, tasks, sessions, blocks });
+    Object.assign(state, { subjects, tasks, sessions, blocks, events });
     if (!state.focus.subjectId && subjects.length > 0) {
       state.focus.subjectId = defaultSubjectId();
     }
@@ -2823,6 +3781,7 @@ async function init() {
     renderTaskList();
     renderTasksView();
     renderFocusView();
+    renderCalendarView();
     renderMetrics();
     renderPlannedBlocks();
 
@@ -2838,6 +3797,7 @@ async function init() {
     renderTaskList();
     renderTasksView();
     renderFocusView();
+    renderCalendarView();
     renderPlannedBlocks();
     applyHashRoute({ updateHash: false });
     showToast('Local storage is unavailable, so changes cannot be saved.', { tone: 'error', duration: 6000 });

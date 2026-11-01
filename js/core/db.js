@@ -17,16 +17,18 @@
  */
 
 const DB_NAME = 'StudyOS_DB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export const STORES = Object.freeze({
   SUBJECTS: 'subjects',
   TASKS: 'tasks',
   SESSIONS: 'sessions',
   SCHEDULE_BLOCKS: 'scheduleBlocks',
+  EVENTS: 'events',
 });
 
 export const PRIORITIES = Object.freeze(['high', 'medium', 'low']);
+export const EVENT_TYPES = Object.freeze(['exam', 'assignment', 'lab', 'milestone']);
 
 const DEFAULT_DURATION_MINUTES = 45;
 
@@ -150,6 +152,27 @@ function normalizeTask(input) {
   };
 }
 
+function normalizeEvent(input = {}) {
+  const now = new Date();
+  const type = EVENT_TYPES.includes(input.type) ? input.type : 'exam';
+  const priority = PRIORITIES.includes(input.priority) ? input.priority : 'medium';
+  const date = normalizeDueDateString(input.date, now);
+
+  return {
+    ...input,
+    id: input.id ?? generateId('event'),
+    title: String(input.title ?? '').trim(),
+    type,
+    subjectId: input.subjectId || null,
+    priority,
+    date,
+    timeLabel: String(input.timeLabel ?? '').trim() || '10:00 AM',
+    location: String(input.location ?? '').trim(),
+    notes: String(input.notes ?? '').trim(),
+    createdAt: input.createdAt ?? now.toISOString(),
+  };
+}
+
 /* ==========================================================================
    Open + seed
    ========================================================================== */
@@ -186,6 +209,13 @@ function openDatabase() {
       if (!db.objectStoreNames.contains(STORES.SCHEDULE_BLOCKS)) {
         db.createObjectStore(STORES.SCHEDULE_BLOCKS, { keyPath: 'id' });
       }
+
+      if (!db.objectStoreNames.contains(STORES.EVENTS)) {
+        const events = db.createObjectStore(STORES.EVENTS, { keyPath: 'id' });
+        events.createIndex('date', 'date', { unique: false });
+        events.createIndex('subjectId', 'subjectId', { unique: false });
+        events.createIndex('type', 'type', { unique: false });
+      }
     };
 
     request.onsuccess = () => {
@@ -203,22 +233,34 @@ function openDatabase() {
 }
 
 /**
- * Seeds demo data in ONE transaction, and only if `subjects` is empty.
- * All seed ids are fixed, so even two tabs racing here cannot duplicate rows.
+ * Seeds demo data in ONE transaction if `subjects` is empty, and also seeds
+ * the 3 initial academic events if `events` is empty (e.g. after v1 -> v2 upgrade).
  */
 function seedIfEmpty(db) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(Object.values(STORES), 'readwrite');
-    const countRequest = tx.objectStore(STORES.SUBJECTS).count();
+    const subjectCountReq = tx.objectStore(STORES.SUBJECTS).count();
+    const eventCountReq = tx.objectStore(STORES.EVENTS).count();
 
-    countRequest.onsuccess = () => {
-      if (countRequest.result > 0) return;
+    let seedData = null;
+    const ensureSeedData = () => {
+      if (!seedData) seedData = buildSeedData(new Date());
+      return seedData;
+    };
 
-      const seed = buildSeedData(new Date());
+    subjectCountReq.onsuccess = () => {
+      if (subjectCountReq.result > 0) return;
+      const seed = ensureSeedData();
       seed.subjects.forEach((row) => tx.objectStore(STORES.SUBJECTS).put(normalizeSubject(row)));
       seed.tasks.forEach((row) => tx.objectStore(STORES.TASKS).put(normalizeTask(row)));
       seed.sessions.forEach((row) => tx.objectStore(STORES.SESSIONS).put(row));
       seed.scheduleBlocks.forEach((row) => tx.objectStore(STORES.SCHEDULE_BLOCKS).put(row));
+    };
+
+    eventCountReq.onsuccess = () => {
+      if (eventCountReq.result > 0) return;
+      const seed = ensureSeedData();
+      seed.events.forEach((row) => tx.objectStore(STORES.EVENTS).put(normalizeEvent(row)));
     };
 
     tx.oncomplete = () => resolve();
@@ -313,7 +355,7 @@ export async function updateSubject(subject) {
 }
 
 /**
- * Deletes a subject and unassigns (or removes when `deleteTasks: true`) its tasks
+ * Deletes a subject and unassigns (or removes when `deleteTasks: true`) its tasks and events
  * within a single atomic IndexedDB transaction.
  */
 export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
@@ -321,9 +363,10 @@ export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
   if (!id) return false;
 
   const db = await initDB();
-  const tx = db.transaction([STORES.SUBJECTS, STORES.TASKS], 'readwrite');
+  const tx = db.transaction([STORES.SUBJECTS, STORES.TASKS, STORES.EVENTS], 'readwrite');
   const subjectStore = tx.objectStore(STORES.SUBJECTS);
   const taskStore = tx.objectStore(STORES.TASKS);
+  const eventStore = tx.objectStore(STORES.EVENTS);
 
   subjectStore.delete(id);
 
@@ -336,6 +379,19 @@ export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
         taskStore.delete(task.id);
       } else {
         taskStore.put(normalizeTask({ ...task, subjectId: null }));
+      }
+    }
+  };
+
+  const eventsRequest = eventStore.getAll();
+  eventsRequest.onsuccess = () => {
+    const events = eventsRequest.result ?? [];
+    for (const ev of events) {
+      if (ev.subjectId !== id) continue;
+      if (deleteTasks) {
+        eventStore.delete(ev.id);
+      } else {
+        eventStore.put(normalizeEvent({ ...ev, subjectId: null }));
       }
     }
   };
@@ -462,6 +518,50 @@ export async function deleteSession(id) {
 }
 
 /* ==========================================================================
+   Academic Events & Milestones
+   ========================================================================== */
+
+export async function getAllEvents() {
+  const rows = await getAll(STORES.EVENTS);
+  return rows
+    .map((row) => normalizeEvent(row))
+    .sort(
+      (a, b) =>
+        String(a.date).localeCompare(String(b.date)) ||
+        String(a.timeLabel).localeCompare(String(b.timeLabel)) ||
+        String(a.title).localeCompare(String(b.title)),
+    );
+}
+
+export async function addEvent(event) {
+  return putOne(STORES.EVENTS, normalizeEvent(event));
+}
+
+export async function updateEvent(event) {
+  if (!event || !event.id) throw new Error('updateEvent requires an event with an id.');
+  const db = await initDB();
+  const current = await promisify(
+    db.transaction(STORES.EVENTS, 'readonly').objectStore(STORES.EVENTS).get(event.id),
+  );
+  const merged = normalizeEvent({
+    ...(current ?? {}),
+    ...event,
+    id: event.id,
+  });
+  return putOne(STORES.EVENTS, merged);
+}
+
+export async function deleteEvent(eventId) {
+  const id = String(eventId ?? '').trim();
+  if (!id) return false;
+  const db = await initDB();
+  const tx = db.transaction(STORES.EVENTS, 'readwrite');
+  tx.objectStore(STORES.EVENTS).delete(id);
+  await transactionDone(tx);
+  return true;
+}
+
+/* ==========================================================================
    Schedule blocks
    ========================================================================== */
 
@@ -566,5 +666,42 @@ function buildSeedData(now) {
     },
   ];
 
-  return { subjects, tasks, sessions, scheduleBlocks };
+  // 3 initial academic milestones (4d, 7d, 11d from today)
+  const events = [
+    {
+      id: 'event-seed-1',
+      title: 'CS-301 Midterm Exam',
+      type: 'exam',
+      subjectId: 'cs-301',
+      priority: 'high',
+      date: toDateKey(at(4, 10, 0)),
+      timeLabel: '10:00 AM',
+      location: 'Hall B',
+      notes: 'Covers asymptotic analysis, divide-and-conquer, and dynamic programming.',
+    },
+    {
+      id: 'event-seed-2',
+      title: 'Problem Set 5: Vector Spaces',
+      type: 'assignment',
+      subjectId: 'math-204',
+      priority: 'medium',
+      date: toDateKey(at(7, 23, 59)),
+      timeLabel: '11:59 PM',
+      location: 'Canvas Upload',
+      notes: 'Basis, dimension, rank-nullity theorem proofs.',
+    },
+    {
+      id: 'event-seed-3',
+      title: "Faraday's Law Lab Submission",
+      type: 'lab',
+      subjectId: 'phys-102',
+      priority: 'medium',
+      date: toDateKey(at(11, 17, 0)),
+      timeLabel: '5:00 PM',
+      location: 'Physics Lab 204',
+      notes: 'Include oscilloscope plots and error propagation analysis.',
+    },
+  ];
+
+  return { subjects, tasks, sessions, scheduleBlocks, events };
 }
