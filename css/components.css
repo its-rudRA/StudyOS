@@ -4425,6 +4425,193 @@ body.is-zen-mode .workspace-inner {
   color: var(--text-muted);
 }
 
+/* ==========================================================================
+   In-App Install & Download Trigger (Sidebar Button + Guide Modal)
+   ========================================================================== */
+
+.sidebar-install-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.34);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.14) 0%, rgba(139, 92, 246, 0.08) 100%);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  box-shadow:
+    0 0 18px rgba(99, 102, 241, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.sidebar-install-btn:hover {
+  border-color: rgba(129, 140, 248, 0.62);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.22) 0%, rgba(139, 92, 246, 0.14) 100%);
+  box-shadow:
+    0 0 24px rgba(99, 102, 241, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.sidebar-install-btn:active {
+  transform: translateY(0);
+}
+
+.sidebar-install-btn.is-ready {
+  border-color: rgba(129, 140, 248, 0.55);
+  box-shadow:
+    0 0 22px rgba(99, 102, 241, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-install-btn.is-installed {
+  border-color: rgba(16, 185, 129, 0.32);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(16, 185, 129, 0.05) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-install-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(129, 140, 248, 0.28);
+}
+
+.sidebar-install-btn.is-installed .sidebar-install-icon {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.sidebar-install-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.sidebar-install-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-install-sub {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-install-badge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #c7d2fe;
+  background: rgba(99, 102, 241, 0.24);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  flex-shrink: 0;
+}
+
+.sidebar-install-btn.is-installed .sidebar-install-badge {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.install-guide-modal {
+  max-width: 500px;
+}
+
+.install-guide-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.install-guide-lead {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.install-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.install-step-item {
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.install-step-badge {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+.install-step-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.install-step-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.install-inline-kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
 /* Priority View-Stacking Fix: strictly hide any section with [hidden] */
 [hidden], #dashboard-content[hidden], #subjects-view[hidden], #tasks-view[hidden], #focus-view[hidden], #calendar-view[hidden], #analytics-view[hidden] { display: none !important; }
 

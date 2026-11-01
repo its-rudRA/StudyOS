@@ -126,6 +126,27 @@
       </div>
 
       <div class="sidebar-footer">
+        <button
+          type="button"
+          class="sidebar-install-btn"
+          id="sidebar-install-btn"
+          aria-label="Install StudyOS as a native desktop or mobile app"
+          title="Install StudyOS Desktop App"
+        >
+          <span class="sidebar-install-icon" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </span>
+          <span class="sidebar-install-copy">
+            <strong class="sidebar-install-title" id="sidebar-install-title">Install Desktop App</strong>
+            <span class="sidebar-install-sub" id="sidebar-install-sub">Native offline workspace</span>
+          </span>
+          <span class="sidebar-install-badge" id="sidebar-install-badge">APP</span>
+        </button>
+
         <div class="status-pill-row">
           <div class="status-pill" id="status-pill" role="status">
             <span class="status-dot" aria-hidden="true"></span>
@@ -1557,6 +1578,56 @@
           <span class="cmd-hint-item"><kbd>ESC</kbd> Close</span>
         </div>
         <span class="cmd-palette-brand">StudyOS Command Center</span>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- ===================== Install App Instruction Modal ===================== -->
+  <dialog id="install-guide-modal" class="task-modal install-guide-modal" aria-labelledby="install-guide-title">
+    <div class="task-modal-form">
+      <header class="task-modal-header">
+        <div>
+          <span class="task-modal-kicker">Progressive Web App • Offline Ready</span>
+          <h2 id="install-guide-title" class="task-modal-title">Install StudyOS as a Desktop App</h2>
+        </div>
+        <button type="button" class="icon-btn task-modal-close" id="install-guide-close-btn" aria-label="Close install guide">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="task-modal-body install-guide-body">
+        <p class="install-guide-lead">
+          StudyOS runs 100% locally on your device with offline caching and persistent IndexedDB storage. Follow the quick step for your browser to add it to your Dock, Taskbar, or Applications folder:
+        </p>
+
+        <div class="install-step-list">
+          <div class="install-step-item">
+            <span class="install-step-badge">Chrome / Edge / Brave</span>
+            <p class="install-step-text">
+              Click the <strong>Install StudyOS</strong> icon <span class="install-inline-kbd">⊕</span> on the right side of your browser's address bar, or open the browser menu <strong>⋮ → Cast, save, and share → Install page as app…</strong>
+            </p>
+          </div>
+
+          <div class="install-step-item">
+            <span class="install-step-badge">Safari (macOS Sonoma+)</span>
+            <p class="install-step-text">
+              In the top menu bar, choose <strong>File → Add to Dock…</strong> (or click the <strong>Share</strong> button in the toolbar and select <strong>Add to Dock</strong>).
+            </p>
+          </div>
+
+          <div class="install-step-item">
+            <span class="install-step-badge">iOS / iPadOS / Mobile</span>
+            <p class="install-step-text">
+              Tap the <strong>Share</strong> button in Safari or Chrome and select <strong>Add to Home Screen</strong> for a full-screen standalone experience.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <footer class="task-modal-footer">
+        <button type="button" class="btn btn-primary" id="install-guide-done-btn">Got It</button>
       </footer>
     </div>
   </dialog>

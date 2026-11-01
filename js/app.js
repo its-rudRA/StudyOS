@@ -126,10 +126,14 @@ const state = {
     range: '7d', // '7d' | '14d' | 'all'
     sessionSubjectFilter: 'all', // 'all' | subjectId | 'none'
   },
+  deferredPrompt: null,
+  isAppInstalled: false,
 };
 
 /** Cached DOM references, filled by cacheElements(). */
 const refs = {};
+
+let deferredPrompt = null;
 
 let listRefreshTimer = null;
 let autoPlanBusy = false;
@@ -4192,6 +4196,117 @@ function handleCalendarAgendaClick(event) {
 }
 
 /* ==========================================================================
+   In-App Install & Download Trigger (PWA Installation Module)
+   ========================================================================== */
+
+function isRunningStandalone() {
+  try {
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: window-controls-overlay)').matches ||
+      window.navigator.standalone === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function updateInstallTriggerUI() {
+  const installed = state.isAppInstalled || isRunningStandalone();
+  state.isAppInstalled = installed;
+
+  if (!refs.sidebarInstallBtn) return;
+
+  refs.sidebarInstallBtn.classList.toggle('is-installed', installed);
+  refs.sidebarInstallBtn.classList.toggle('is-ready', Boolean(deferredPrompt) && !installed);
+
+  if (installed) {
+    if (refs.sidebarInstallTitle) refs.sidebarInstallTitle.textContent = 'Desktop App Active';
+    if (refs.sidebarInstallSub) refs.sidebarInstallSub.textContent = 'Installed on this device';
+    if (refs.sidebarInstallBadge) refs.sidebarInstallBadge.textContent = 'INSTALLED';
+  } else if (deferredPrompt) {
+    if (refs.sidebarInstallTitle) refs.sidebarInstallTitle.textContent = 'Install Desktop App';
+    if (refs.sidebarInstallSub) refs.sidebarInstallSub.textContent = '1-click native install ready';
+    if (refs.sidebarInstallBadge) refs.sidebarInstallBadge.textContent = 'INSTALL';
+  } else {
+    if (refs.sidebarInstallTitle) refs.sidebarInstallTitle.textContent = 'Install Desktop App';
+    if (refs.sidebarInstallSub) refs.sidebarInstallSub.textContent = 'Native offline workspace';
+    if (refs.sidebarInstallBadge) refs.sidebarInstallBadge.textContent = 'APP';
+  }
+}
+
+function openInstallGuideModal() {
+  if (!refs.installGuideModal) return;
+  if (!refs.installGuideModal.open) {
+    refs.installGuideModal.showModal();
+  }
+}
+
+function closeInstallGuideModal() {
+  if (!refs.installGuideModal) return;
+  if (refs.installGuideModal.open) {
+    refs.installGuideModal.close();
+  }
+}
+
+async function triggerAppInstall() {
+  if (state.isAppInstalled || isRunningStandalone()) {
+    updateInstallTriggerUI();
+    showToast('StudyOS is already installed as your native desktop app!');
+    return { status: 'already-installed' };
+  }
+
+  const promptEvent = deferredPrompt || state.deferredPrompt;
+  if (promptEvent && typeof promptEvent.prompt === 'function') {
+    try {
+      await promptEvent.prompt();
+      const choiceResult = await promptEvent.userChoice;
+      deferredPrompt = null;
+      state.deferredPrompt = null;
+
+      if (choiceResult && choiceResult.outcome === 'accepted') {
+        state.isAppInstalled = true;
+        updateInstallTriggerUI();
+        showToast('StudyOS is installing as your native desktop app!');
+        return { status: 'accepted' };
+      }
+
+      updateInstallTriggerUI();
+      showToast('Installation cancelled — you can install StudyOS anytime from the sidebar.');
+      return { status: 'dismissed' };
+    } catch (err) {
+      console.warn('StudyOS: Install prompt error —', err);
+      deferredPrompt = null;
+      state.deferredPrompt = null;
+      updateInstallTriggerUI();
+      openInstallGuideModal();
+      return { status: 'fallback-modal' };
+    }
+  }
+
+  openInstallGuideModal();
+  return { status: 'fallback-modal' };
+}
+
+window.triggerAppInstall = triggerAppInstall;
+
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredPrompt = event;
+  state.deferredPrompt = event;
+  updateInstallTriggerUI();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredPrompt = null;
+  state.deferredPrompt = null;
+  state.isAppInstalled = true;
+  updateInstallTriggerUI();
+  closeInstallGuideModal();
+  showToast('StudyOS is now installed as your native desktop app!');
+});
+
+/* ==========================================================================
    Phase 8 — Global Command Palette (Cmd + K / Ctrl + K)
    ========================================================================== */
 
@@ -4268,6 +4383,19 @@ function buildCommandPaletteItems(rawQuery = '') {
 
   // 2. Quick Actions
   const quickActions = [
+    {
+      id: 'act-install-app',
+      group: 'Quick Actions',
+      icon: '📲',
+      title: 'Install Desktop App',
+      subtitle:
+        state.isAppInstalled || isRunningStandalone()
+          ? 'StudyOS is already running as your native desktop app'
+          : 'Download and install StudyOS as a standalone native desktop/mobile app',
+      badge: state.isAppInstalled || isRunningStandalone() ? 'Installed' : 'PWA App',
+      keywords: 'install app download desktop native pwa standalone dock',
+      action: () => triggerAppInstall(),
+    },
     {
       id: 'act-new-task',
       group: 'Quick Actions',
@@ -5056,6 +5184,29 @@ function bindEvents() {
     });
   }
 
+  // In-App Install & Download Trigger
+  if (refs.sidebarInstallBtn) {
+    refs.sidebarInstallBtn.addEventListener('click', () => {
+      triggerAppInstall();
+    });
+  }
+
+  if (refs.installGuideCloseBtn) {
+    refs.installGuideCloseBtn.addEventListener('click', () => closeInstallGuideModal());
+  }
+
+  if (refs.installGuideDoneBtn) {
+    refs.installGuideDoneBtn.addEventListener('click', () => closeInstallGuideModal());
+  }
+
+  if (refs.installGuideModal) {
+    refs.installGuideModal.addEventListener('click', (event) => {
+      if (event.target === refs.installGuideModal) {
+        closeInstallGuideModal();
+      }
+    });
+  }
+
   document.addEventListener('click', (event) => {
     if (
       refs.dataManagementMenu &&
@@ -5253,6 +5404,11 @@ const api = {
   async resetDemoData() {
     await ready;
     return resetDemoDatabase();
+  },
+
+  /** Triggers native PWA installation prompt or opens the browser install guide. */
+  async triggerAppInstall() {
+    return triggerAppInstall();
   },
 };
 
@@ -5455,6 +5611,13 @@ function cacheElements() {
     commandPaletteInput: byId('command-palette-input'),
     commandPaletteList: byId('command-palette-list'),
     commandPaletteCloseBtn: byId('command-palette-close-btn'),
+    sidebarInstallBtn: byId('sidebar-install-btn'),
+    sidebarInstallTitle: byId('sidebar-install-title'),
+    sidebarInstallSub: byId('sidebar-install-sub'),
+    sidebarInstallBadge: byId('sidebar-install-badge'),
+    installGuideModal: byId('install-guide-modal'),
+    installGuideCloseBtn: byId('install-guide-close-btn'),
+    installGuideDoneBtn: byId('install-guide-done-btn'),
   });
 }
 
@@ -5473,6 +5636,7 @@ function registerServiceWorker() {
 
 async function init() {
   cacheElements();
+  updateInstallTriggerUI();
   registerServiceWorker();
   requestPersistentStorage();
 
