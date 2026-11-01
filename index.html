@@ -4,14 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="StudyOS — Your Personal Academic Command Center">
-  <meta name="theme-color" content="#0A0A0E">
+  <meta name="theme-color" content="#6366f1">
   <title>StudyOS — Your Personal Academic Command Center</title>
+
+  <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
+  <link rel="apple-touch-icon" href="./assets/icon.svg">
+  <link rel="manifest" href="./manifest.json">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="css/variables.css">
-  <link rel="stylesheet" href="css/layout.css">
-  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="./css/variables.css">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
 </head>
 <body>
   <div class="app-shell">
@@ -217,6 +221,13 @@
           </div>
 
           <div class="header-actions">
+            <button type="button" class="btn-cmd-k" id="command-palette-btn" title="Open Command Palette (Cmd+K / Ctrl+K)" aria-label="Open Command Palette">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+              <span>Search / Command</span>
+              <kbd>⌘K</kbd>
+            </button>
             <button type="button" class="btn-secondary" id="new-task-btn">
               <span>+ New Task</span>
               <kbd>⌘N</kbd>
@@ -1518,6 +1529,38 @@
     </div>
   </dialog>
 
-  <script type="module" src="js/app.js"></script>
+  <!-- ===================== Command Palette Modal (Cmd + K) ===================== -->
+  <dialog id="command-palette-modal" class="command-palette-modal" aria-label="StudyOS Command Palette">
+    <div class="cmd-palette-shell">
+      <div class="cmd-palette-search-bar">
+        <svg class="cmd-palette-search-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+        <input
+          type="search"
+          id="command-palette-input"
+          class="cmd-palette-input"
+          placeholder="Type a command or search tasks, courses, exams..."
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Search commands, tasks, courses, and exams"
+        >
+        <button type="button" class="cmd-palette-esc-btn" id="command-palette-close-btn" aria-label="Close Command Palette">ESC</button>
+      </div>
+
+      <div id="command-palette-list" class="cmd-palette-list" role="listbox" aria-label="Command results"></div>
+
+      <footer class="cmd-palette-footer">
+        <div class="cmd-palette-hints">
+          <span class="cmd-hint-item"><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+          <span class="cmd-hint-item"><kbd>↵</kbd> Select</span>
+          <span class="cmd-hint-item"><kbd>ESC</kbd> Close</span>
+        </div>
+        <span class="cmd-palette-brand">StudyOS Command Center</span>
+      </footer>
+    </div>
+  </dialog>
+
+  <script type="module" src="./js/app.js"></script>
 </body>
 </html>

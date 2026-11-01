@@ -32,6 +32,7 @@ import {
   exportDatabase,
   importDatabase,
   resetDemoDatabase,
+  requestPersistentStorage,
   toDateKey,
   normalizeDueDateString,
   formatDueLabelFromDate,
@@ -41,6 +42,8 @@ import {
   FOCUS_MODES,
   clampFocusMinutes,
   playCompletionChime,
+  requestTimerNotificationPermission,
+  sendTimerCompletionNotification,
   createFocusTimer,
 } from './modules/focus.js';
 
@@ -373,24 +376,40 @@ function renderDashboardWeeklyChart() {
 }
 
 /**
- * Returns the integer number of calendar days from `now` (midnight) to `dateStr` (YYYY-MM-DD).
+ * Parses a date string into local `{ year, month, day }` components, normalizing
+ * non-ISO strings through `normalizeDueDateString` first.
+ */
+function parseLocalCalendarDate(dateStr, fallbackNow = new Date()) {
+  if (!dateStr) return null;
+  const raw = String(dateStr).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? raw
+    : normalizeDueDateString(raw, fallbackNow);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const [year, month, day] = normalized.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return { year, month, day, dateKey: normalized };
+}
+
+/**
+ * Returns the exact integer number of calendar days from `now` (local date) to `dateStr` (YYYY-MM-DD),
+ * using `Date.UTC(y, m - 1, d)` on both endpoints to eliminate DST and timezone offset bugs.
  * Returns null if `dateStr` is invalid.
  */
 function daysFromToday(dateStr, now = new Date()) {
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return null;
-  const [y, m, d] = String(dateStr).split('-').map(Number);
-  const target = new Date(y, m - 1, d);
-  if (Number.isNaN(target.getTime())) return null;
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((target.getTime() - todayStart.getTime()) / 86_400_000);
+  const parts = parseLocalCalendarDate(dateStr, now);
+  if (!parts) return null;
+  const targetUtc = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((targetUtc - todayUtc) / 86_400_000);
 }
 
 function formatShortDate(dateStr) {
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return String(dateStr || '');
-  const [y, m, d] = String(dateStr).split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
+  const parts = parseLocalCalendarDate(dateStr);
+  if (!parts) return String(dateStr || '');
+  const dt = new Date(parts.year, parts.month - 1, parts.day);
   if (Number.isNaN(dt.getTime())) return String(dateStr);
-  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function formatCountdownPillText(diffDays) {
@@ -404,25 +423,41 @@ function formatCountdownPillText(diffDays) {
 
 function renderDashboardDeadlinesAndExam() {
   const now = new Date();
+  const todayKey = toDateKey(now);
   const priorityRank = { high: 3, medium: 2, low: 1 };
 
   const upcomingEvents = state.events
-    .map((ev) => ({ ...ev, diffDays: daysFromToday(ev.date, now) }))
-    .filter((ev) => ev.diffDays !== null && ev.diffDays >= 0)
-    .sort(
-      (a, b) =>
+    .map((ev) => {
+      const normalizedDate = normalizeDueDateString(ev.date, now);
+      return {
+        ...ev,
+        date: normalizedDate,
+        diffDays: daysFromToday(normalizedDate, now),
+      };
+    })
+    .filter((ev) => ev.diffDays !== null && ev.diffDays >= 0 && ev.date >= todayKey)
+    .sort((a, b) => {
+      const dateDiff = new Date(`${a.date}T00:00:00`) - new Date(`${b.date}T00:00:00`);
+      if (dateDiff !== 0) return dateDiff;
+      return (
         a.diffDays - b.diffDays ||
         (priorityRank[b.priority] ?? 2) - (priorityRank[a.priority] ?? 2) ||
-        String(a.title).localeCompare(String(b.title)),
-    );
+        String(a.title).localeCompare(String(b.title))
+      );
+    });
 
   if (refs.badgeCalendar) {
     refs.badgeCalendar.textContent = String(upcomingEvents.length);
   }
 
   // 1. Live Dashboard "Next Exam" Card
+  // Strictly select the earliest upcoming future exam (diffDays > 0) if available,
+  // otherwise an exam today (diffDays === 0), otherwise the earliest upcoming milestone.
   const upcomingExams = upcomingEvents.filter((ev) => ev.type === 'exam');
-  const nextMilestone = upcomingExams[0] ?? upcomingEvents[0] ?? null;
+  const futureExams = upcomingExams.filter((ev) => ev.diffDays > 0);
+  const futureEvents = upcomingEvents.filter((ev) => ev.diffDays > 0);
+  const nextMilestone =
+    futureExams[0] ?? upcomingExams[0] ?? futureEvents[0] ?? upcomingEvents[0] ?? null;
 
   if (refs.nextExamTag && refs.nextExamLabel && refs.nextExamCountdown && refs.nextExamMeta) {
     if (nextMilestone) {
@@ -577,6 +612,9 @@ function renderDashboardDeadlinesAndExam() {
 
   refs.dashboardDeadlineList.replaceChildren(...nodes);
 }
+
+const renderNextExamCard = renderDashboardDeadlinesAndExam;
+const renderDashboardUpcomingEvents = renderDashboardDeadlinesAndExam;
 
 /** Tasks narrowed by the sidebar subject filter only (what the filter tabs count). */
 function getScopedTasks() {
@@ -2409,10 +2447,29 @@ async function handleFocusTimerComplete(completed) {
   playCompletionChime({ muted: state.focus.muted });
 
   if (completed.isBreak) {
+    sendTimerCompletionNotification({
+      title: 'StudyOS — Break Complete!',
+      body: 'Your break is finished. Ready for your next focus session!',
+    });
     selectFocusMode('pomodoro', 25);
     showToast('Break complete! Ready for your next focus session.');
     return;
   }
+
+  const subject = getSubject(state.focus.subjectId);
+  const boundTask = state.focus.taskId
+    ? state.tasks.find((item) => item.id === state.focus.taskId)
+    : null;
+  const contextLabel = boundTask
+    ? `${subject ? `${subject.code}: ` : ''}${boundTask.title}`
+    : subject
+      ? `${subject.code} — ${subject.name}`
+      : 'Deep Work Session';
+
+  sendTimerCompletionNotification({
+    title: 'StudyOS — Session Complete!',
+    body: `Logged ${completed.durationMinutes}m for ${contextLabel}. Great work!`,
+  });
 
   await recordAndSyncFocusSession({
     subjectId: state.focus.subjectId,
@@ -2953,11 +3010,12 @@ function closeEventModal() {
 async function handleEventFormSubmit(event) {
   event.preventDefault();
 
+  const dateInputEl = document.getElementById('event-date-input') || refs.eventDateInput;
   const editingId = refs.eventIdInput.value.trim();
   const title = refs.eventTitleInput.value.trim();
   const type = EVENT_TYPES.includes(refs.eventTypeSelect.value) ? refs.eventTypeSelect.value : 'exam';
   const subjectId = refs.eventSubjectSelect.value || null;
-  const rawDate = refs.eventDateInput.value;
+  const rawDate = dateInputEl ? dateInputEl.value.trim() : '';
   const timeLabel = refs.eventTimeInput.value.trim() || 'All Day';
   const location = refs.eventLocationInput.value.trim();
   const checkedPriority = refs.eventForm.querySelector('input[name="eventPriority"]:checked');
@@ -2973,11 +3031,11 @@ async function handleEventFormSubmit(event) {
 
   if (!rawDate) {
     showEventFormError('Please choose a valid date.');
-    refs.eventDateInput.focus();
+    dateInputEl?.focus();
     return;
   }
 
-  const date = normalizeDueDateString(rawDate);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : normalizeDueDateString(rawDate);
 
   refs.eventSaveBtn.disabled = true;
   try {
@@ -3009,6 +3067,8 @@ async function handleEventFormSubmit(event) {
 
     state.events = await getAllEvents();
     selectCalendarDate(saved.date, { syncMonth: true });
+    renderDashboardDeadlinesAndExam();
+    renderCalendarView();
     renderMetrics();
     closeEventModal();
 
@@ -3069,6 +3129,34 @@ const TONE_COLOR_HEX = Object.freeze({
   violet: '#A78BFA',
   cyan: '#22D3EE',
 });
+
+function toneClass(tone) {
+  const safeTone = SUBJECT_TONES.includes(tone) ? tone : 'blue';
+  return `course-tag--${safeTone} subject-tone-${safeTone}`;
+}
+
+function escapeHtml(raw) {
+  return String(raw ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseIsoDateParts(isoStr) {
+  if (!isoStr || typeof isoStr !== 'string') return [2026, 1, 1];
+  const parts = isoStr.split('T')[0].split('-').map(Number);
+  return [parts[0] || 2026, parts[1] || 1, parts[2] || 1];
+}
+
+function daysBetweenIso(startIso, endIso) {
+  const [sy, sm, sd] = parseIsoDateParts(startIso);
+  const [ey, em, ed] = parseIsoDateParts(endIso);
+  const startDay = new Date(sy, sm - 1, sd, 0, 0, 0, 0);
+  const endDay = new Date(ey, em - 1, ed, 0, 0, 0, 0);
+  return Math.round((endDay.getTime() - startDay.getTime()) / 86_400_000);
+}
 
 function formatDecimalHours(minutes) {
   const total = Math.max(0, Math.round(Number(minutes) || 0));
@@ -3786,7 +3874,35 @@ function toggleDataMenu(forceOpen) {
   refs.dataMenuBtn.setAttribute('aria-expanded', String(shouldOpen));
 }
 
-async function handleExportBackup() {
+async function reloadStateAndRenderAll() {
+  const [subjects, tasks, sessions, blocks, events] = await Promise.all([
+    getAllSubjects(),
+    getAllTasks(),
+    getAllSessions(),
+    getScheduleBlocks(),
+    getAllEvents(),
+  ]);
+
+  Object.assign(state, { subjects, tasks, sessions, blocks, events });
+  state.focus.subjectId = defaultSubjectId();
+  state.focus.taskId = null;
+  setStorageStatus(true);
+
+  renderSubjects();
+  populateSubjectSelects();
+  renderSubjectsView();
+  renderFilters();
+  renderTaskList();
+  renderTasksView();
+  renderFocusView();
+  renderCalendarView();
+  renderAnalyticsView();
+  renderDashboardDeadlinesAndExam();
+  renderMetrics();
+  renderPlannedBlocks();
+}
+
+async function exportDatabaseJson() {
   toggleDataMenu(false);
   try {
     const backupPayload = await exportDatabase();
@@ -3794,7 +3910,7 @@ async function handleExportBackup() {
     const blob = new Blob([jsonString], { type: 'application/json' });
     const objectUrl = URL.createObjectURL(blob);
 
-    const filename = `studyos-backup-${toDateKey(new Date())}.json`;
+    const filename = `StudyOS-Backup-${toDateKey(new Date())}.json`;
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
     anchor.download = filename;
@@ -3805,11 +3921,15 @@ async function handleExportBackup() {
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
 
     showToast(`Exported backup to ${filename}`);
+    return backupPayload;
   } catch (error) {
     console.warn('StudyOS: could not export database.', error);
     showToast('Could not export backup. Please try again.', { tone: 'error' });
+    return null;
   }
 }
+
+const handleExportBackup = exportDatabaseJson;
 
 function summarizeBackupPreview(jsonString) {
   const parsed = JSON.parse(jsonString);
@@ -3821,21 +3941,36 @@ function summarizeBackupPreview(jsonString) {
       ? parsed.data
       : parsed;
 
-  const hasAppSignature = parsed.appName === 'StudyOS' || payload.appName === 'StudyOS';
+  const hasAppSignature =
+    parsed.app === 'StudyOS' ||
+    parsed.appName === 'StudyOS' ||
+    payload.app === 'StudyOS' ||
+    payload.appName === 'StudyOS';
   const hasKnownArrays =
     Array.isArray(payload.subjects) ||
     Array.isArray(payload.tasks) ||
     Array.isArray(payload.sessions) ||
-    Array.isArray(payload.events);
+    Array.isArray(payload.scheduleBlocks) ||
+    Array.isArray(payload.events) ||
+    Array.isArray(parsed.subjects) ||
+    Array.isArray(parsed.tasks) ||
+    Array.isArray(parsed.sessions) ||
+    Array.isArray(parsed.scheduleBlocks) ||
+    Array.isArray(parsed.events);
 
   if (!hasAppSignature && !hasKnownArrays) {
     throw new Error('Selected file is not a valid StudyOS backup.');
   }
 
-  const subjectsCount = Array.isArray(payload.subjects) ? payload.subjects.length : 0;
-  const tasksCount = Array.isArray(payload.tasks) ? payload.tasks.length : 0;
-  const sessionsCount = Array.isArray(payload.sessions) ? payload.sessions.length : 0;
-  const eventsCount = Array.isArray(payload.events) ? payload.events.length : 0;
+  const subjectsArr = payload.subjects ?? parsed.subjects ?? [];
+  const tasksArr = payload.tasks ?? parsed.tasks ?? [];
+  const sessionsArr = payload.sessions ?? parsed.sessions ?? [];
+  const eventsArr = payload.events ?? parsed.events ?? [];
+
+  const subjectsCount = Array.isArray(subjectsArr) ? subjectsArr.length : 0;
+  const tasksCount = Array.isArray(tasksArr) ? tasksArr.length : 0;
+  const sessionsCount = Array.isArray(sessionsArr) ? sessionsArr.length : 0;
+  const eventsCount = Array.isArray(eventsArr) ? eventsArr.length : 0;
 
   return `${subjectsCount} subjects · ${tasksCount} tasks · ${sessionsCount} sessions · ${eventsCount} events`;
 }
@@ -3843,7 +3978,7 @@ function summarizeBackupPreview(jsonString) {
 function openRestoreConfirmModal({ fileName, summaryText, jsonString }) {
   pendingRestoreJsonString = jsonString;
   if (refs.restoreFileName) {
-    refs.restoreFileName.textContent = fileName || 'studyos-backup.json';
+    refs.restoreFileName.textContent = fileName || 'StudyOS-Backup.json';
   }
   if (refs.restoreFileCounts) {
     refs.restoreFileCounts.textContent = summaryText || 'Valid StudyOS Backup';
@@ -3878,6 +4013,31 @@ function closeRestoreConfirmModal() {
       refs.restoreConfirmModal.removeAttribute('open');
     }
   }
+}
+
+function triggerRestoreFilePicker() {
+  toggleDataMenu(false);
+  if (refs.restoreBackupInput) {
+    refs.restoreBackupInput.value = '';
+    refs.restoreBackupInput.click();
+  }
+}
+
+async function importDatabaseJson(fileOrJson) {
+  let jsonString = '';
+  if (typeof fileOrJson === 'string') {
+    jsonString = fileOrJson;
+  } else if (fileOrJson && typeof fileOrJson.text === 'function') {
+    jsonString = await fileOrJson.text();
+  } else if (fileOrJson && typeof fileOrJson === 'object') {
+    jsonString = JSON.stringify(fileOrJson);
+  } else {
+    throw new Error('Please provide a valid StudyOS backup JSON file.');
+  }
+
+  const result = await importDatabase(jsonString);
+  await reloadStateAndRenderAll();
+  return result;
 }
 
 function handleRestoreFileSelected(event) {
@@ -3919,12 +4079,13 @@ async function handleConfirmRestoreBackup() {
   }
 
   try {
-    await importDatabase(pendingRestoreJsonString);
+    const result = await importDatabaseJson(pendingRestoreJsonString);
     closeRestoreConfirmModal();
-    showToast('Backup restored! Reloading StudyOS...');
-    setTimeout(() => {
-      window.location.reload();
-    }, 650);
+    const c = result?.counts;
+    const summary = c
+      ? `${c.subjects} courses, ${c.tasks} tasks, ${c.sessions} sessions & ${c.events} events`
+      : 'all StudyOS data';
+    showToast(`Backup restored (${summary})!`);
   } catch (error) {
     console.warn('StudyOS: could not import database.', error);
     if (refs.restoreFormError) {
@@ -3943,31 +4104,7 @@ async function handleResetDemoData() {
   toggleDataMenu(false);
   try {
     await resetDemoDatabase();
-    const [subjects, tasks, sessions, blocks, events] = await Promise.all([
-      getAllSubjects(),
-      getAllTasks(),
-      getAllSessions(),
-      getScheduleBlocks(),
-      getAllEvents(),
-    ]);
-
-    Object.assign(state, { subjects, tasks, sessions, blocks, events });
-    state.focus.subjectId = defaultSubjectId();
-    state.focus.taskId = null;
-    setStorageStatus(true);
-
-    renderSubjects();
-    populateSubjectSelects();
-    renderSubjectsView();
-    renderFilters();
-    renderTaskList();
-    renderTasksView();
-    renderFocusView();
-    renderCalendarView();
-    renderAnalyticsView();
-    renderMetrics();
-    renderPlannedBlocks();
-
+    await reloadStateAndRenderAll();
     showToast('Demo data refreshed with 7-day focus sessions & current milestones!');
   } catch (error) {
     console.error('StudyOS: could not reset demo database —', error);
@@ -4052,6 +4189,333 @@ function handleCalendarAgendaClick(event) {
   if (agendaCard && agendaCard.dataset.date) {
     selectCalendarDate(agendaCard.dataset.date, { syncMonth: true });
   }
+}
+
+/* ==========================================================================
+   Phase 8 — Global Command Palette (Cmd + K / Ctrl + K)
+   ========================================================================== */
+
+let commandPaletteItems = [];
+let commandPaletteActiveIndex = 0;
+
+function buildCommandPaletteItems(rawQuery = '') {
+  const query = String(rawQuery || '').trim().toLowerCase();
+  const items = [];
+
+  // 1. Navigation commands
+  const navCommands = [
+    {
+      id: 'nav-dashboard',
+      group: 'Navigation',
+      icon: '⌂',
+      title: 'Jump to Dashboard',
+      subtitle: 'Overview, daily plan, next exam & weekly study activity',
+      badge: 'View',
+      keywords: 'dashboard home overview today main',
+      action: () => switchView('dashboard'),
+    },
+    {
+      id: 'nav-subjects',
+      group: 'Navigation',
+      icon: '📚',
+      title: 'Jump to Subjects & Courses',
+      subtitle: `Manage ${state.subjects.length} enrolled courses & progress`,
+      badge: 'View',
+      keywords: 'subjects courses classes syllabus',
+      action: () => switchView('subjects'),
+    },
+    {
+      id: 'nav-tasks',
+      group: 'Navigation',
+      icon: '✓',
+      title: 'Jump to All Tasks & Assignments',
+      subtitle: `${state.tasks.filter((t) => !t.completed).length} pending tasks across courses`,
+      badge: 'View',
+      keywords: 'tasks assignments homework todo checklist',
+      action: () => switchView('tasks'),
+    },
+    {
+      id: 'nav-calendar',
+      group: 'Navigation',
+      icon: '📅',
+      title: 'Jump to Academic Calendar',
+      subtitle: 'Interactive month grid, exams, labs & milestone deadlines',
+      badge: 'View',
+      keywords: 'calendar schedule exams dates month deadlines',
+      action: () => switchView('calendar'),
+    },
+    {
+      id: 'nav-focus',
+      group: 'Navigation',
+      icon: '⏱',
+      title: 'Jump to Focus Mode',
+      subtitle: 'Pomodoro & Deep Work timer with live session logging',
+      badge: 'View',
+      keywords: 'focus timer pomodoro deep work study session',
+      action: () => switchView('focus'),
+    },
+    {
+      id: 'nav-analytics',
+      group: 'Navigation',
+      icon: '📊',
+      title: 'Jump to Study Analytics & Insights',
+      subtitle: 'Focus hours, completion rate, streak & course breakdown',
+      badge: 'View',
+      keywords: 'analytics stats insights charts hours streak',
+      action: () => switchView('analytics'),
+    },
+  ];
+
+  // 2. Quick Actions
+  const quickActions = [
+    {
+      id: 'act-new-task',
+      group: 'Quick Actions',
+      icon: '＋',
+      title: '+ New Task',
+      subtitle: 'Create a new assignment, problem set, or study task',
+      badge: '⌘N',
+      keywords: 'new add create task assignment homework',
+      action: () => openTaskModal(),
+    },
+    {
+      id: 'act-new-subject',
+      group: 'Quick Actions',
+      icon: '＋',
+      title: '+ New Course',
+      subtitle: 'Add a new subject or course to your semester',
+      badge: 'Course',
+      keywords: 'new add create subject course class',
+      action: () => openSubjectModal(),
+    },
+    {
+      id: 'act-new-event',
+      group: 'Quick Actions',
+      icon: '📅',
+      title: '+ Add Exam / Event',
+      subtitle: 'Schedule a midterm, assignment deadline, or lab on the calendar',
+      badge: 'Event',
+      keywords: 'new add exam event milestone deadline calendar',
+      action: () => openEventModal({ defaultDate: state.calendar.selectedDate }),
+    },
+    {
+      id: 'act-start-pomodoro',
+      group: 'Quick Actions',
+      icon: '▶',
+      title: 'Start 25m Pomodoro',
+      subtitle: 'Launch a 25-minute Pomodoro countdown in Focus Mode immediately',
+      badge: '25m',
+      keywords: 'start pomodoro focus timer 25m session run',
+      action: () => {
+        selectFocusMode('pomodoro', 25);
+        switchView('focus');
+        requestTimerNotificationPermission();
+        focusTimer.start();
+        showToast('Started 25m Pomodoro session!');
+      },
+    },
+    {
+      id: 'act-export-backup',
+      group: 'Quick Actions',
+      icon: '⬇',
+      title: 'Export JSON Backup',
+      subtitle: 'Download all courses, tasks, sessions & exams as StudyOS-Backup-[YYYY-MM-DD].json',
+      badge: 'Backup',
+      keywords: 'export backup download json save data',
+      action: () => exportDatabaseJson(),
+    },
+    {
+      id: 'act-restore-backup',
+      group: 'Quick Actions',
+      icon: '⬆',
+      title: 'Restore Backup',
+      subtitle: 'Import a StudyOS .json backup file and restore all records instantly',
+      badge: 'Restore',
+      keywords: 'import restore upload backup json load data',
+      action: () => triggerRestoreFilePicker(),
+    },
+    {
+      id: 'act-reset-demo',
+      group: 'Quick Actions',
+      icon: '↻',
+      title: 'Reset / Refresh Demo Data',
+      subtitle: 'Re-seed fresh November academic dates, tasks, and focus logs',
+      badge: 'Reset',
+      keywords: 'reset refresh demo seed data restore',
+      action: () => handleResetDemoData(),
+    },
+  ];
+
+  items.push(...quickActions, ...navCommands);
+
+  // 3. Live IndexedDB Subjects
+  for (const subject of state.subjects) {
+    items.push({
+      id: `subj-${subject.id}`,
+      group: 'Subjects & Courses',
+      icon: '🏷',
+      title: `${subject.code} — ${subject.name}`,
+      subtitle: `Filter tasks for ${subject.code} or view course details`,
+      badge: subject.code,
+      keywords: `${subject.code} ${subject.name} course subject filter`.toLowerCase(),
+      action: () => {
+        state.tasksFilter.subjectId = subject.id;
+        if (refs.tasksSubjectFilter) refs.tasksSubjectFilter.value = subject.id;
+        switchView('tasks');
+        renderSubjectSelection();
+        renderTasksView();
+      },
+    });
+  }
+
+  // 4. Live IndexedDB Tasks
+  for (const task of state.tasks) {
+    const subject = getSubject(task.subjectId);
+    const code = subject ? subject.code : 'GEN';
+    const statusText = task.completed ? 'Completed' : `Due: ${task.dueLabel || 'Upcoming'}`;
+    items.push({
+      id: `task-${task.id}`,
+      group: 'Tasks & Assignments',
+      icon: task.completed ? '✓' : '○',
+      title: task.title,
+      subtitle: `${code} • ${task.durationMinutes}m • ${statusText}`,
+      badge: task.completed ? 'Done' : code,
+      keywords: `${task.title} ${code} ${subject ? subject.name : ''} ${task.notes || ''} ${task.dueLabel || ''} task`.toLowerCase(),
+      action: () => {
+        if (!task.completed) {
+          requestFocusSession(task);
+        } else {
+          openTaskModal({ task });
+        }
+      },
+    });
+  }
+
+  // 5. Live IndexedDB Upcoming Exams & Events
+  for (const ev of state.events) {
+    const subject = getSubject(ev.subjectId);
+    const code = subject ? subject.code : 'GEN';
+    const typeLabel = EVENT_TYPE_META[ev.type]?.label || 'Event';
+    items.push({
+      id: `event-${ev.id}`,
+      group: 'Exams & Milestones',
+      icon: ev.type === 'exam' ? '🎓' : '📌',
+      title: ev.title,
+      subtitle: `${typeLabel} • ${formatShortDate(ev.date)} • ${ev.timeLabel || 'All Day'}${ev.location ? ` • ${ev.location}` : ''}`,
+      badge: code,
+      keywords: `${ev.title} ${code} ${typeLabel} ${ev.location || ''} ${ev.date} exam event calendar`.toLowerCase(),
+      action: () => {
+        selectCalendarDate(ev.date, { syncMonth: true });
+        switchView('calendar');
+      },
+    });
+  }
+
+  if (!query) {
+    return items.slice(0, 24);
+  }
+
+  const tokens = query.split(/\s+/).filter(Boolean);
+  return items.filter((item) => {
+    const haystack = `${item.title} ${item.subtitle} ${item.badge} ${item.keywords || ''}`.toLowerCase();
+    return tokens.every((tok) => haystack.includes(tok));
+  });
+}
+
+function renderCommandPaletteList() {
+  if (!refs.commandPaletteList) return;
+
+  const query = refs.commandPaletteInput ? refs.commandPaletteInput.value : '';
+  commandPaletteItems = buildCommandPaletteItems(query);
+
+  if (commandPaletteActiveIndex >= commandPaletteItems.length) {
+    commandPaletteActiveIndex = 0;
+  }
+  if (commandPaletteActiveIndex < 0) {
+    commandPaletteActiveIndex = Math.max(0, commandPaletteItems.length - 1);
+  }
+
+  if (commandPaletteItems.length === 0) {
+    const empty = createEl(
+      'div',
+      'cmd-palette-empty',
+      'No matching commands, tasks, courses, or exams found.',
+    );
+    refs.commandPaletteList.replaceChildren(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  let lastGroup = null;
+
+  commandPaletteItems.forEach((item, idx) => {
+    if (item.group !== lastGroup) {
+      lastGroup = item.group;
+      fragment.append(createEl('div', 'cmd-palette-group-title', item.group));
+    }
+
+    const btn = createEl(
+      'button',
+      `cmd-palette-item${idx === commandPaletteActiveIndex ? ' is-active' : ''}`,
+    );
+    btn.type = 'button';
+    btn.dataset.cmdIndex = String(idx);
+    btn.setAttribute('role', 'option');
+    btn.setAttribute('aria-selected', String(idx === commandPaletteActiveIndex));
+
+    const left = createEl('div', 'cmd-palette-item-left');
+    const icon = createEl('span', 'cmd-palette-item-icon', item.icon);
+    const textWrap = createEl('div', 'cmd-palette-item-text');
+    const titleEl = createEl('span', 'cmd-palette-item-title', item.title);
+    const subEl = createEl('span', 'cmd-palette-item-subtitle', item.subtitle);
+    textWrap.append(titleEl, subEl);
+    left.append(icon, textWrap);
+
+    const right = createEl('div', 'cmd-palette-item-right');
+    if (item.badge) {
+      right.append(createEl('span', 'cmd-palette-badge', item.badge));
+    }
+
+    btn.append(left, right);
+    fragment.append(btn);
+  });
+
+  refs.commandPaletteList.replaceChildren(fragment);
+
+  const activeNode = refs.commandPaletteList.querySelector('.cmd-palette-item.is-active');
+  if (activeNode) {
+    activeNode.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function openCommandPalette() {
+  if (!refs.commandPaletteModal) return;
+  if (refs.dataManagementMenu && !refs.dataManagementMenu.hidden) {
+    toggleDataMenu(false);
+  }
+  commandPaletteActiveIndex = 0;
+  if (refs.commandPaletteInput) {
+    refs.commandPaletteInput.value = '';
+  }
+  renderCommandPaletteList();
+  if (!refs.commandPaletteModal.open) {
+    refs.commandPaletteModal.showModal();
+  }
+  refs.commandPaletteInput?.focus();
+}
+
+function closeCommandPalette() {
+  if (!refs.commandPaletteModal) return;
+  if (refs.commandPaletteModal.open) {
+    refs.commandPaletteModal.close();
+  }
+}
+
+function executeCommandPaletteItem(index) {
+  const item = commandPaletteItems[index];
+  if (!item) return;
+  closeCommandPalette();
+  item.action();
 }
 
 function bindEvents() {
@@ -4538,6 +5002,60 @@ function bindEvents() {
     });
   }
 
+  // Command Palette (Cmd+K / Ctrl+K)
+  if (refs.commandPaletteBtn) {
+    refs.commandPaletteBtn.addEventListener('click', () => openCommandPalette());
+  }
+
+  if (refs.commandPaletteCloseBtn) {
+    refs.commandPaletteCloseBtn.addEventListener('click', () => closeCommandPalette());
+  }
+
+  if (refs.commandPaletteModal) {
+    refs.commandPaletteModal.addEventListener('click', (event) => {
+      if (event.target === refs.commandPaletteModal) {
+        closeCommandPalette();
+      }
+    });
+  }
+
+  if (refs.commandPaletteInput) {
+    refs.commandPaletteInput.addEventListener('input', () => {
+      commandPaletteActiveIndex = 0;
+      renderCommandPaletteList();
+    });
+
+    refs.commandPaletteInput.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        if (commandPaletteItems.length > 0) {
+          commandPaletteActiveIndex = (commandPaletteActiveIndex + 1) % commandPaletteItems.length;
+          renderCommandPaletteList();
+        }
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (commandPaletteItems.length > 0) {
+          commandPaletteActiveIndex =
+            (commandPaletteActiveIndex - 1 + commandPaletteItems.length) % commandPaletteItems.length;
+          renderCommandPaletteList();
+        }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (commandPaletteItems.length > 0) {
+          executeCommandPaletteItem(commandPaletteActiveIndex);
+        }
+      }
+    });
+  }
+
+  if (refs.commandPaletteList) {
+    refs.commandPaletteList.addEventListener('click', (event) => {
+      const btn = event.target.closest('.cmd-palette-item[data-cmd-index]');
+      if (!btn) return;
+      executeCommandPaletteItem(Number(btn.dataset.cmdIndex));
+    });
+  }
+
   document.addEventListener('click', (event) => {
     if (
       refs.dataManagementMenu &&
@@ -4558,6 +5076,19 @@ function bindEvents() {
   refs.startFocusButton.addEventListener('click', () => requestFocusSession());
 
   document.addEventListener('keydown', (event) => {
+    // Global Cmd+K / Ctrl+K shortcut for Command Palette
+    const isCmdOrCtrlK =
+      (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k';
+    if (isCmdOrCtrlK) {
+      event.preventDefault();
+      if (refs.commandPaletteModal?.open) {
+        closeCommandPalette();
+      } else {
+        openCommandPalette();
+      }
+      return;
+    }
+
     if (event.key === 'Escape' && refs.dataManagementMenu && !refs.dataManagementMenu.hidden) {
       toggleDataMenu(false);
       return;
@@ -4919,11 +5450,31 @@ function cacheElements() {
     restoreFormError: byId('restore-form-error'),
     restoreCancelBtn: byId('restore-cancel-btn'),
     restoreConfirmBtn: byId('restore-confirm-btn'),
+    commandPaletteBtn: byId('command-palette-btn'),
+    commandPaletteModal: byId('command-palette-modal'),
+    commandPaletteInput: byId('command-palette-input'),
+    commandPaletteList: byId('command-palette-list'),
+    commandPaletteCloseBtn: byId('command-palette-close-btn'),
   });
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+      navigator.serviceWorker.register('./sw.js').catch(() => {
+        // Ignore registration errors in restricted environments
+      });
+    }
+  } catch {
+    // Ignore
+  }
 }
 
 async function init() {
   cacheElements();
+  registerServiceWorker();
+  requestPersistentStorage();
 
   // Restore saved chime mute preference if available
   try {
@@ -4979,6 +5530,8 @@ async function init() {
     renderFocusView();
     renderCalendarView();
     renderAnalyticsView();
+    renderNextExamCard();
+    renderDashboardUpcomingEvents();
     renderMetrics();
     renderPlannedBlocks();
     applyHashRoute({ updateHash: false });

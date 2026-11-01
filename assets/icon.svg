@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="studyos-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <linearGradient id="studyos-inner" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.98" />
+      <stop offset="100%" stop-color="#e0e7ff" stop-opacity="0.9" />
+    </linearGradient>
+    <filter id="soft-glow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#090a0f" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Rounded macOS-style App Squircle -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#studyos-bg)" />
+  <rect x="26" y="26" width="460" height="460" rx="106" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="4" />
+
+  <!-- StudyOS Diamond / Command Emblem -->
+  <g filter="url(#soft-glow)">
+    <path
+      d="M256 108 L404 256 L256 404 L108 256 Z"
+      fill="none"
+      stroke="url(#studyos-inner)"
+      stroke-width="34"
+      stroke-linejoin="round"
+      stroke-linecap="round"
+    />
+    <circle cx="256" cy="256" r="42" fill="url(#studyos-inner)" />
+  </g>
+</svg>

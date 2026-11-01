@@ -1,0 +1,26 @@
+{
+  "name": "StudyOS — Personal Academic Operating System",
+  "short_name": "StudyOS",
+  "description": "Local-first academic command center for courses, tasks, smart scheduling, deep-work focus timers, and analytics.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090a0f",
+  "theme_color": "#6366f1",
+  "categories": ["education", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

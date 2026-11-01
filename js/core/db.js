@@ -17,7 +17,7 @@
  */
 
 const DB_NAME = 'StudyOS_DB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export const STORES = Object.freeze({
   SUBJECTS: 'subjects',
@@ -109,6 +109,31 @@ export function normalizeDueDateString(rawDueDate, fallbackDate = new Date()) {
   if (!rawDueDate) return toDateKey(fallbackDate);
   const value = String(rawDueDate).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+
+  // Support DD/MM/YYYY or DD-MM-YYYY format (e.g. 06/11/2026 -> 2026-11-06)
+  const dmyMatch = value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const day = Number(dmyMatch[1]);
+    const month = Number(dmyMatch[2]);
+    const year = Number(dmyMatch[3]);
+    const candidate = new Date(year, month - 1, day);
+    if (!Number.isNaN(candidate.getTime())) {
+      return toDateKey(candidate);
+    }
+  }
+
+  // Support YYYY/MM/DD format
+  const ymdSlashMatch = value.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (ymdSlashMatch) {
+    const year = Number(ymdSlashMatch[1]);
+    const month = Number(ymdSlashMatch[2]);
+    const day = Number(ymdSlashMatch[3]);
+    const candidate = new Date(year, month - 1, day);
+    if (!Number.isNaN(candidate.getTime())) {
+      return toDateKey(candidate);
+    }
+  }
+
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? toDateKey(fallbackDate) : toDateKey(parsed);
 }
@@ -238,19 +263,9 @@ function openDatabase(requestedVersion = DB_VERSION) {
       return;
     }
 
-    let settled = false;
-    let blockTimer = null;
-
-    const clearBlockTimer = () => {
-      if (blockTimer) {
-        clearTimeout(blockTimer);
-        blockTimer = null;
-      }
-    };
-
     const finalizeAndVerify = (db) => {
       if (!hasAllRequiredStores(db)) {
-        const nextVersion = Math.max(Number(db.version) || DB_VERSION, DB_VERSION) + 1;
+        const nextVersion = Math.max(DB_VERSION, (Number(db.version) || 1) + 1);
         console.warn(
           `StudyOS: Missing object store(s) detected on DB v${db.version}. Upgrading to v${nextVersion}...`,
         );
@@ -297,47 +312,15 @@ function openDatabase(requestedVersion = DB_VERSION) {
 
     request.onblocked = () => {
       console.warn(
-        'StudyOS: IndexedDB upgrade is blocked by another open connection. Waiting briefly...',
+        'StudyOS: IndexedDB upgrade is waiting for another open connection to close...',
       );
-      clearBlockTimer();
-      blockTimer = setTimeout(() => {
-        if (settled) return;
-        try {
-          const fallbackReq = indexedDB.open(DB_NAME);
-          fallbackReq.onsuccess = () => {
-            if (settled) {
-              fallbackReq.result.close();
-              return;
-            }
-            settled = true;
-            finalizeAndVerify(fallbackReq.result);
-          };
-          fallbackReq.onerror = () => {
-            if (settled) return;
-            settled = true;
-            console.error('StudyOS: fallback indexedDB.open failed —', fallbackReq.error);
-            reject(fallbackReq.error || new Error('IndexedDB upgrade blocked.'));
-          };
-        } catch (fallbackErr) {
-          if (settled) return;
-          settled = true;
-          console.error('StudyOS: fallback indexedDB.open threw —', fallbackErr);
-          reject(fallbackErr);
-        }
-      }, 1200);
     };
 
     request.onsuccess = () => {
-      clearBlockTimer();
-      if (settled) return;
-      settled = true;
       finalizeAndVerify(request.result);
     };
 
     request.onerror = () => {
-      clearBlockTimer();
-      if (settled) return;
-      settled = true;
       // Handle VersionError if browser already has a higher version than requestedVersion
       if (request.error && request.error.name === 'VersionError') {
         try {
@@ -503,12 +486,34 @@ function seedIfEmpty(db) {
 }
 
 /**
+ * Requests durable, non-evictable storage from the browser's StorageManager API
+ * so IndexedDB records are protected from automatic eviction.
+ * @returns {Promise<boolean>}
+ */
+export async function requestPersistentStorage() {
+  try {
+    if (!globalThis.navigator?.storage) return false;
+    if (typeof globalThis.navigator.storage.persisted === 'function') {
+      const alreadyPersisted = await globalThis.navigator.storage.persisted();
+      if (alreadyPersisted) return true;
+    }
+    if (typeof globalThis.navigator.storage.persist === 'function') {
+      return await globalThis.navigator.storage.persist();
+    }
+  } catch (err) {
+    console.warn('StudyOS: Persistent storage request was not granted —', err);
+  }
+  return false;
+}
+
+/**
  * Opens the database (once) and seeds/refreshes it on startup.
  * Safe to call repeatedly — every caller shares the same promise.
  * @returns {Promise<IDBDatabase>}
  */
 export function initDB() {
   if (!dbPromise) {
+    requestPersistentStorage();
     dbPromise = openDatabase()
       .then(async (db) => {
         await seedIfEmpty(db);
@@ -523,12 +528,52 @@ export function initDB() {
   return dbPromise;
 }
 
+/**
+ * Self-healing store check: ensures the specified object store (or array of stores)
+ * exists on the active `IDBDatabase` connection. If any store is missing on a stale
+ * cached connection, closes the connection, resets `dbPromise`, and re-opens at
+ * `db.version + 1` so `onupgradeneeded` creates the missing store and seeds it.
+ * @param {string | string[]} storeNameOrNames
+ * @returns {Promise<IDBDatabase>}
+ */
+export async function ensureStoreExists(storeNameOrNames) {
+  const required = Array.isArray(storeNameOrNames) ? storeNameOrNames : [storeNameOrNames];
+  let db = await initDB();
+  const missing = required.some((name) => !db.objectStoreNames.contains(name));
+  if (!missing) {
+    return db;
+  }
+
+  const nextVersion = Math.max(DB_VERSION, (Number(db.version) || 1) + 1);
+  console.warn(
+    `StudyOS: Store(s) [${required.join(', ')}] missing on cached DB v${db.version}. Self-healing to v${nextVersion}...`,
+  );
+  try {
+    db.close();
+  } catch {
+    // Ignore close errors
+  }
+
+  dbPromise = openDatabase(nextVersion)
+    .then(async (upgradedDb) => {
+      await seedIfEmpty(upgradedDb);
+      return upgradedDb;
+    })
+    .catch((err) => {
+      console.error('StudyOS: ensureStoreExists self-heal failed —', err);
+      dbPromise = null;
+      throw err;
+    });
+
+  return dbPromise;
+}
+
 /* ==========================================================================
    Generic store helpers
    ========================================================================== */
 
 async function getAll(storeName) {
-  const db = await initDB();
+  const db = await ensureStoreExists(storeName);
   if (!db.objectStoreNames.contains(storeName)) {
     return [];
   }
@@ -536,11 +581,21 @@ async function getAll(storeName) {
 }
 
 async function putOne(storeName, value) {
-  const db = await initDB();
+  const db = await ensureStoreExists(storeName);
   const tx = db.transaction(storeName, 'readwrite');
   tx.objectStore(storeName).put(value);
   await transactionDone(tx);
   return value;
+}
+
+async function deleteOne(storeName, id) {
+  const key = String(id ?? '').trim();
+  if (!key) return false;
+  const db = await ensureStoreExists(storeName);
+  const tx = db.transaction(storeName, 'readwrite');
+  tx.objectStore(storeName).delete(key);
+  await transactionDone(tx);
+  return true;
 }
 
 /* ==========================================================================
@@ -579,7 +634,7 @@ export async function addSubject(subject) {
 
 export async function updateSubject(subject) {
   if (!subject || !subject.id) throw new Error('updateSubject requires a subject with an id.');
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.SUBJECTS);
   const current = await promisify(
     db.transaction(STORES.SUBJECTS, 'readonly').objectStore(STORES.SUBJECTS).get(subject.id),
   );
@@ -599,7 +654,7 @@ export async function deleteSubject(subjectId, { deleteTasks = false } = {}) {
   const id = String(subjectId ?? '').trim();
   if (!id) return false;
 
-  const db = await initDB();
+  const db = await ensureStoreExists([STORES.SUBJECTS, STORES.TASKS, STORES.EVENTS]);
   const tx = db.transaction([STORES.SUBJECTS, STORES.TASKS, STORES.EVENTS], 'readwrite');
   const subjectStore = tx.objectStore(STORES.SUBJECTS);
   const taskStore = tx.objectStore(STORES.TASKS);
@@ -647,7 +702,7 @@ export async function getAllTasks() {
 }
 
 export async function getTaskById(id) {
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.TASKS);
   const task = await promisify(db.transaction(STORES.TASKS, 'readonly').objectStore(STORES.TASKS).get(id));
   return task ? normalizeTask(task) : null;
 }
@@ -659,7 +714,7 @@ export async function addTask(task) {
 
 export async function updateTask(task) {
   if (!task || !task.id) throw new Error('updateTask requires a task with an id.');
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.TASKS);
   const current = await promisify(
     db.transaction(STORES.TASKS, 'readonly').objectStore(STORES.TASKS).get(task.id),
   );
@@ -688,7 +743,7 @@ export async function updateTask(task) {
  * @returns {Promise<object | null>} the updated task, or null when the id is unknown.
  */
 export async function toggleTaskCompletion(id) {
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.TASKS);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORES.TASKS, 'readwrite');
     const store = tx.objectStore(STORES.TASKS);
@@ -709,11 +764,7 @@ export async function toggleTaskCompletion(id) {
 }
 
 export async function deleteTask(id) {
-  const db = await initDB();
-  const tx = db.transaction(STORES.TASKS, 'readwrite');
-  tx.objectStore(STORES.TASKS).delete(id);
-  await transactionDone(tx);
-  return true;
+  return deleteOne(STORES.TASKS, id);
 }
 
 /* ==========================================================================
@@ -747,11 +798,7 @@ export async function addSession(session = {}) {
 }
 
 export async function deleteSession(id) {
-  const db = await initDB();
-  const tx = db.transaction(STORES.SESSIONS, 'readwrite');
-  tx.objectStore(STORES.SESSIONS).delete(id);
-  await transactionDone(tx);
-  return true;
+  return deleteOne(STORES.SESSIONS, id);
 }
 
 /* ==========================================================================
@@ -776,7 +823,7 @@ export async function addEvent(event) {
 
 export async function updateEvent(event) {
   if (!event || !event.id) throw new Error('updateEvent requires an event with an id.');
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.EVENTS);
   const current = await promisify(
     db.transaction(STORES.EVENTS, 'readonly').objectStore(STORES.EVENTS).get(event.id),
   );
@@ -789,13 +836,7 @@ export async function updateEvent(event) {
 }
 
 export async function deleteEvent(eventId) {
-  const id = String(eventId ?? '').trim();
-  if (!id) return false;
-  const db = await initDB();
-  const tx = db.transaction(STORES.EVENTS, 'readwrite');
-  tx.objectStore(STORES.EVENTS).delete(id);
-  await transactionDone(tx);
-  return true;
+  return deleteOne(STORES.EVENTS, eventId);
 }
 
 /* ==========================================================================
@@ -809,7 +850,7 @@ export async function getScheduleBlocks() {
 
 /** Replaces the whole schedule atomically; `order` follows array order. */
 export async function saveScheduleBlocks(blocks) {
-  const db = await initDB();
+  const db = await ensureStoreExists(STORES.SCHEDULE_BLOCKS);
   const tx = db.transaction(STORES.SCHEDULE_BLOCKS, 'readwrite');
   const store = tx.objectStore(STORES.SCHEDULE_BLOCKS);
   const saved = blocks.map((block, index) => ({
@@ -835,7 +876,6 @@ export async function saveScheduleBlocks(blocks) {
  * and data arrays.
  */
 export async function exportDatabase() {
-  const db = await initDB();
   const storeNames = [
     STORES.SUBJECTS,
     STORES.TASKS,
@@ -843,6 +883,7 @@ export async function exportDatabase() {
     STORES.EVENTS,
     STORES.SCHEDULE_BLOCKS,
   ];
+  const db = await ensureStoreExists(storeNames);
   const tx = db.transaction(storeNames, 'readonly');
 
   const [subjects, tasks, sessions, events, scheduleBlocks] = await Promise.all([
@@ -857,31 +898,49 @@ export async function exportDatabase() {
   const sortedSubjects = [...subjects].sort(
     (a, b) => rank(a) - rank(b) || String(a.code || '').localeCompare(String(b.code || '')),
   );
+  const normalizedTasks = tasks.map((row) => normalizeTask(row));
+  const normalizedEvents = events.map((row) => normalizeEvent(row));
+  const sortedBlocks = [...scheduleBlocks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const timestamp = new Date().toISOString();
 
   return {
-    appName: 'StudyOS',
     version: DB_VERSION,
-    exportedAt: new Date().toISOString(),
+    app: 'StudyOS',
+    appName: 'StudyOS',
+    timestamp,
+    exportedAt: timestamp,
+    subjects: sortedSubjects,
+    tasks: normalizedTasks,
+    sessions,
+    scheduleBlocks: sortedBlocks,
+    events: normalizedEvents,
     data: {
       subjects: sortedSubjects,
-      tasks: tasks.map((row) => normalizeTask(row)),
+      tasks: normalizedTasks,
       sessions,
-      events: events.map((row) => normalizeEvent(row)),
-      scheduleBlocks: [...scheduleBlocks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+      scheduleBlocks: sortedBlocks,
+      events: normalizedEvents,
     },
   };
 }
 
+export const exportDatabaseJson = exportDatabase;
+
 /**
- * Parses a StudyOS backup JSON string (or object), validates that it contains
+ * Parses a StudyOS backup JSON string, File/Blob, or object, validates that it contains
  * valid StudyOS data, opens a single atomic readwrite transaction across all
  * stores, clears old records, inserts the imported records, and returns a
  * summary of restored counts.
  */
 export async function importDatabase(jsonInput) {
+  let rawInput = jsonInput;
+  if (typeof Blob !== 'undefined' && rawInput instanceof Blob && typeof rawInput.text === 'function') {
+    rawInput = await rawInput.text();
+  }
+
   let parsed;
-  if (typeof jsonInput === 'string') {
-    const trimmed = jsonInput.trim();
+  if (typeof rawInput === 'string') {
+    const trimmed = rawInput.trim();
     if (!trimmed) {
       throw new Error('The selected backup file is empty.');
     }
@@ -890,46 +949,57 @@ export async function importDatabase(jsonInput) {
     } catch {
       throw new Error('Invalid JSON file. Please select a valid StudyOS .json backup.');
     }
-  } else if (jsonInput && typeof jsonInput === 'object') {
-    parsed = jsonInput;
+  } else if (rawInput && typeof rawInput === 'object') {
+    parsed = rawInput;
   } else {
-    throw new Error('Backup data must be a JSON string or object.');
+    throw new Error('Backup data must be a JSON string, File, or object.');
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Backup payload must be a JSON object.');
   }
 
-  // Support both `{ appName: "StudyOS", data: { subjects, tasks, ... } }` and top-level `{ subjects, tasks, ... }`
+  // Support both `{ app: "StudyOS", subjects, tasks, ... }` and `{ appName: "StudyOS", data: { ... } }`
   const payload =
     parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
       ? parsed.data
       : parsed;
 
-  const hasAppSignature = parsed.appName === 'StudyOS' || payload.appName === 'StudyOS';
+  const hasAppSignature =
+    parsed.app === 'StudyOS' ||
+    parsed.appName === 'StudyOS' ||
+    payload.app === 'StudyOS' ||
+    payload.appName === 'StudyOS';
   const hasKnownArrays =
     Array.isArray(payload.subjects) ||
     Array.isArray(payload.tasks) ||
     Array.isArray(payload.sessions) ||
-    Array.isArray(payload.events);
+    Array.isArray(payload.scheduleBlocks) ||
+    Array.isArray(payload.events) ||
+    Array.isArray(parsed.subjects) ||
+    Array.isArray(parsed.tasks) ||
+    Array.isArray(parsed.sessions) ||
+    Array.isArray(parsed.scheduleBlocks) ||
+    Array.isArray(parsed.events);
 
   if (!hasAppSignature && !hasKnownArrays) {
     throw new Error(
-      'Unrecognized backup format. Expected a StudyOS backup containing subjects, tasks, sessions, or events.',
+      'Unrecognized backup format. Expected a StudyOS backup containing subjects, tasks, sessions, scheduleBlocks, or events.',
     );
   }
 
   for (const key of ['subjects', 'tasks', 'sessions', 'events', 'scheduleBlocks']) {
-    if (payload[key] !== undefined && !Array.isArray(payload[key])) {
+    const arrCandidate = payload[key] !== undefined ? payload[key] : parsed[key];
+    if (arrCandidate !== undefined && !Array.isArray(arrCandidate)) {
       throw new Error(`Invalid backup structure: "${key}" must be an array.`);
     }
   }
 
-  const rawSubjects = payload.subjects ?? [];
-  const rawTasks = payload.tasks ?? [];
-  const rawSessions = payload.sessions ?? [];
-  const rawEvents = payload.events ?? [];
-  const rawScheduleBlocks = payload.scheduleBlocks ?? [];
+  const rawSubjects = payload.subjects ?? parsed.subjects ?? [];
+  const rawTasks = payload.tasks ?? parsed.tasks ?? [];
+  const rawSessions = payload.sessions ?? parsed.sessions ?? [];
+  const rawEvents = payload.events ?? parsed.events ?? [];
+  const rawScheduleBlocks = payload.scheduleBlocks ?? parsed.scheduleBlocks ?? [];
 
   const now = new Date();
   const isoNow = now.toISOString();
@@ -976,7 +1046,6 @@ export async function importDatabase(jsonInput) {
       order: Number.isFinite(block.order) ? block.order : index,
     }));
 
-  const db = await initDB();
   const storeNames = [
     STORES.SUBJECTS,
     STORES.TASKS,
@@ -984,6 +1053,7 @@ export async function importDatabase(jsonInput) {
     STORES.EVENTS,
     STORES.SCHEDULE_BLOCKS,
   ];
+  const db = await ensureStoreExists(storeNames);
   const tx = db.transaction(storeNames, 'readwrite');
 
   const subjectStore = tx.objectStore(STORES.SUBJECTS);
@@ -1018,12 +1088,15 @@ export async function importDatabase(jsonInput) {
   };
 }
 
+export const importDatabaseJson = importDatabase;
+
 /**
  * Clears all object stores and re-seeds fresh demo data with dates relative to today.
  */
 export async function resetDemoDatabase() {
-  const db = await initDB();
-  const availableStores = Object.values(STORES).filter((name) =>
+  const allStoreNames = Object.values(STORES);
+  const db = await ensureStoreExists(allStoreNames);
+  const availableStores = allStoreNames.filter((name) =>
     db.objectStoreNames.contains(name),
   );
   const tx = db.transaction(availableStores, 'readwrite');

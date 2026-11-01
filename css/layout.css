@@ -2,10 +2,21 @@
    StudyOS — Application Shell Layout
    ========================================================================== */
 
+html,
+body {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 248px 1fr;
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   background-color: var(--bg-canvas);
   color: var(--text-primary);
 }
@@ -15,10 +26,10 @@
    -------------------------------------------------------------------------- */
 
 .sidebar {
-  position: sticky;
-  top: 0;
+  position: relative;
   width: 248px;
-  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -43,9 +54,12 @@
    Main workspace
    -------------------------------------------------------------------------- */
 
-.main-workspace {
+.main-workspace,
+.workspace {
   min-width: 0;
-  height: 100vh;
+  min-height: 0;
+  height: 100dvh;
+  max-height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
   background:
@@ -122,9 +136,10 @@
 
   /* Sidebar collapses into a compact top bar */
   .sidebar {
-    position: static;
+    position: relative;
     width: 100%;
     height: auto;
+    max-height: none;
     flex-direction: column;
     justify-content: flex-start;
     gap: 14px;
@@ -142,9 +157,12 @@
     display: none;
   }
 
-  .main-workspace {
-    height: auto;
-    overflow-y: visible;
+  .main-workspace,
+  .workspace {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .workspace-inner {

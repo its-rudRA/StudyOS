@@ -137,6 +137,63 @@ export function playCompletionChime({ muted = false } = {}) {
 }
 
 /* ==========================================================================
+   Native Desktop OS Notifications (Notification API)
+   ========================================================================== */
+
+/**
+ * Requests browser / OS notification permission when a user starts a focus session
+ * if permission is currently `'default'`.
+ */
+export async function requestTimerNotificationPermission() {
+  try {
+    if (!('Notification' in globalThis)) return 'unsupported';
+    if (Notification.permission === 'default') {
+      return await Notification.requestPermission();
+    }
+    return Notification.permission;
+  } catch (err) {
+    console.warn('StudyOS: Notification permission request failed —', err);
+    return 'denied';
+  }
+}
+
+/**
+ * Dispatches a native desktop OS notification when a Focus or Break countdown
+ * reaches 00:00 so the user is alerted even when StudyOS is minimized.
+ */
+export function sendTimerCompletionNotification({
+  title = 'StudyOS — Session Complete!',
+  body = 'Your focus session has finished. Great work!',
+} = {}) {
+  try {
+    if (!('Notification' in globalThis)) return null;
+    if (Notification.permission !== 'granted') return null;
+
+    const notification = new Notification(title, {
+      body,
+      icon: 'assets/icon.svg',
+      badge: 'assets/icon.svg',
+      tag: 'studyos-focus-timer',
+      renotify: true,
+    });
+
+    notification.onclick = () => {
+      try {
+        window.focus();
+        notification.close();
+      } catch {
+        // Ignore window focus restrictions
+      }
+    };
+
+    return notification;
+  } catch (err) {
+    console.warn('StudyOS: Could not display desktop notification —', err);
+    return null;
+  }
+}
+
+/* ==========================================================================
    Drift-Compensated Timer Engine
    ========================================================================== */
 
@@ -252,6 +309,7 @@ export function createFocusTimer({ onTick, onComplete } = {}) {
 
   function start() {
     if (status === 'running') return getSnapshot();
+    requestTimerNotificationPermission();
     const now = Date.now();
     if (!sessionStartedAtISO) {
       sessionStartedAtISO = new Date(now).toISOString();
