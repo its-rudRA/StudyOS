@@ -6,7 +6,7 @@
  * local development updates appear immediately without stale cache issues.
  */
 
-const CACHE_NAME = 'studyos-shell-v1';
+const CACHE_NAME = 'studyos-shell-v2';
 
 const APP_SHELL_ASSETS = [
   './',
@@ -20,6 +20,8 @@ const APP_SHELL_ASSETS = [
   './js/modules/focus.js',
   './js/modules/scheduler.js',
   './assets/icon.svg',
+  './assets/icon-192.png',
+  './assets/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
