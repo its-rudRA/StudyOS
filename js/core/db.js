@@ -588,6 +588,200 @@ export async function saveScheduleBlocks(blocks) {
 }
 
 /* ==========================================================================
+   JSON Data Export & Import (Backup & Restore)
+   ========================================================================== */
+
+/**
+ * Opens a read-only transaction across all active object stores (`subjects`,
+ * `tasks`, `sessions`, `events`, and `scheduleBlocks`), fetches all records
+ * from each store, and returns a structured backup object containing metadata
+ * and data arrays.
+ */
+export async function exportDatabase() {
+  const db = await initDB();
+  const storeNames = [
+    STORES.SUBJECTS,
+    STORES.TASKS,
+    STORES.SESSIONS,
+    STORES.EVENTS,
+    STORES.SCHEDULE_BLOCKS,
+  ];
+  const tx = db.transaction(storeNames, 'readonly');
+
+  const [subjects, tasks, sessions, events, scheduleBlocks] = await Promise.all([
+    promisify(tx.objectStore(STORES.SUBJECTS).getAll()),
+    promisify(tx.objectStore(STORES.TASKS).getAll()),
+    promisify(tx.objectStore(STORES.SESSIONS).getAll()),
+    promisify(tx.objectStore(STORES.EVENTS).getAll()),
+    promisify(tx.objectStore(STORES.SCHEDULE_BLOCKS).getAll()),
+  ]);
+
+  const rank = (subject) => (Number.isFinite(subject.order) ? subject.order : Number.MAX_SAFE_INTEGER);
+  const sortedSubjects = [...subjects].sort(
+    (a, b) => rank(a) - rank(b) || String(a.code || '').localeCompare(String(b.code || '')),
+  );
+
+  return {
+    appName: 'StudyOS',
+    version: DB_VERSION,
+    exportedAt: new Date().toISOString(),
+    data: {
+      subjects: sortedSubjects,
+      tasks: tasks.map((row) => normalizeTask(row)),
+      sessions,
+      events: events.map((row) => normalizeEvent(row)),
+      scheduleBlocks: [...scheduleBlocks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    },
+  };
+}
+
+/**
+ * Parses a StudyOS backup JSON string (or object), validates that it contains
+ * valid StudyOS data, opens a single atomic readwrite transaction across all
+ * stores, clears old records, inserts the imported records, and returns a
+ * summary of restored counts.
+ */
+export async function importDatabase(jsonInput) {
+  let parsed;
+  if (typeof jsonInput === 'string') {
+    const trimmed = jsonInput.trim();
+    if (!trimmed) {
+      throw new Error('The selected backup file is empty.');
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error('Invalid JSON file. Please select a valid StudyOS .json backup.');
+    }
+  } else if (jsonInput && typeof jsonInput === 'object') {
+    parsed = jsonInput;
+  } else {
+    throw new Error('Backup data must be a JSON string or object.');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Backup payload must be a JSON object.');
+  }
+
+  // Support both `{ appName: "StudyOS", data: { subjects, tasks, ... } }` and top-level `{ subjects, tasks, ... }`
+  const payload =
+    parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+      ? parsed.data
+      : parsed;
+
+  const hasAppSignature = parsed.appName === 'StudyOS' || payload.appName === 'StudyOS';
+  const hasKnownArrays =
+    Array.isArray(payload.subjects) ||
+    Array.isArray(payload.tasks) ||
+    Array.isArray(payload.sessions) ||
+    Array.isArray(payload.events);
+
+  if (!hasAppSignature && !hasKnownArrays) {
+    throw new Error(
+      'Unrecognized backup format. Expected a StudyOS backup containing subjects, tasks, sessions, or events.',
+    );
+  }
+
+  for (const key of ['subjects', 'tasks', 'sessions', 'events', 'scheduleBlocks']) {
+    if (payload[key] !== undefined && !Array.isArray(payload[key])) {
+      throw new Error(`Invalid backup structure: "${key}" must be an array.`);
+    }
+  }
+
+  const rawSubjects = payload.subjects ?? [];
+  const rawTasks = payload.tasks ?? [];
+  const rawSessions = payload.sessions ?? [];
+  const rawEvents = payload.events ?? [];
+  const rawScheduleBlocks = payload.scheduleBlocks ?? [];
+
+  const now = new Date();
+  const isoNow = now.toISOString();
+
+  const normalizedSubjects = rawSubjects.map((subj, index) =>
+    normalizeSubject({
+      ...subj,
+      order: Number.isFinite(subj?.order) ? subj.order : index,
+    }),
+  );
+
+  const normalizedTasks = rawTasks
+    .filter((task) => task && typeof task === 'object' && String(task.title ?? '').trim())
+    .map((task) => normalizeTask(task));
+
+  const normalizedSessions = rawSessions
+    .filter((session) => session && typeof session === 'object')
+    .map((session) => {
+      const durationMinutes = Math.max(1, Math.round(Number(session.durationMinutes) || 25));
+      const timestamp = session.timestamp ?? session.startedAt ?? isoNow;
+      return {
+        type: 'focus',
+        ...session,
+        id: session.id ?? generateId('session'),
+        subjectId: session.subjectId || null,
+        taskId: session.taskId || null,
+        durationMinutes,
+        date: normalizeDueDateString(session.date, now),
+        timestamp,
+        startedAt: session.startedAt ?? timestamp,
+        title: String(session.title ?? '').trim() || 'Focus Session',
+      };
+    });
+
+  const normalizedEvents = rawEvents
+    .filter((ev) => ev && typeof ev === 'object' && String(ev.title ?? '').trim())
+    .map((ev) => normalizeEvent(ev));
+
+  const normalizedBlocks = rawScheduleBlocks
+    .filter((block) => block && typeof block === 'object')
+    .map((block, index) => ({
+      ...block,
+      id: block.id ?? generateId('block'),
+      order: Number.isFinite(block.order) ? block.order : index,
+    }));
+
+  const db = await initDB();
+  const storeNames = [
+    STORES.SUBJECTS,
+    STORES.TASKS,
+    STORES.SESSIONS,
+    STORES.EVENTS,
+    STORES.SCHEDULE_BLOCKS,
+  ];
+  const tx = db.transaction(storeNames, 'readwrite');
+
+  const subjectStore = tx.objectStore(STORES.SUBJECTS);
+  const taskStore = tx.objectStore(STORES.TASKS);
+  const sessionStore = tx.objectStore(STORES.SESSIONS);
+  const eventStore = tx.objectStore(STORES.EVENTS);
+  const blockStore = tx.objectStore(STORES.SCHEDULE_BLOCKS);
+
+  subjectStore.clear();
+  taskStore.clear();
+  sessionStore.clear();
+  eventStore.clear();
+  blockStore.clear();
+
+  normalizedSubjects.forEach((row) => subjectStore.put(row));
+  normalizedTasks.forEach((row) => taskStore.put(row));
+  normalizedSessions.forEach((row) => sessionStore.put(row));
+  normalizedEvents.forEach((row) => eventStore.put(row));
+  normalizedBlocks.forEach((row) => blockStore.put(row));
+
+  await transactionDone(tx);
+
+  return {
+    success: true,
+    counts: {
+      subjects: normalizedSubjects.length,
+      tasks: normalizedTasks.length,
+      sessions: normalizedSessions.length,
+      events: normalizedEvents.length,
+      scheduleBlocks: normalizedBlocks.length,
+    },
+  };
+}
+
+/* ==========================================================================
    Seed data (first run only)
    ========================================================================== */
 

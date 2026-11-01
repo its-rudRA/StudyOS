@@ -29,6 +29,8 @@ import {
   updateEvent,
   deleteEvent,
   EVENT_TYPES,
+  exportDatabase,
+  importDatabase,
   toDateKey,
   normalizeDueDateString,
   formatDueLabelFromDate,
@@ -3765,12 +3767,175 @@ async function handleAutoPlan() {
 }
 
 /* ==========================================================================
-   Storage status pill
+   Storage status pill & JSON Data Backup / Restore
    ========================================================================== */
 
 function setStorageStatus(ok) {
   refs.statusPill.classList.toggle('is-error', !ok);
   refs.statusDetail.textContent = ok ? 'IndexedDB Synced' : 'Storage unavailable';
+}
+
+let pendingRestoreJsonString = null;
+
+function toggleDataMenu(forceOpen) {
+  if (!refs.dataManagementMenu || !refs.dataMenuBtn) return;
+  const shouldOpen =
+    typeof forceOpen === 'boolean' ? forceOpen : refs.dataManagementMenu.hidden;
+  refs.dataManagementMenu.hidden = !shouldOpen;
+  refs.dataMenuBtn.setAttribute('aria-expanded', String(shouldOpen));
+}
+
+async function handleExportBackup() {
+  toggleDataMenu(false);
+  try {
+    const backupPayload = await exportDatabase();
+    const jsonString = JSON.stringify(backupPayload, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const objectUrl = URL.createObjectURL(blob);
+
+    const filename = `studyos-backup-${toDateKey(new Date())}.json`;
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+
+    showToast(`Exported backup to ${filename}`);
+  } catch (error) {
+    console.warn('StudyOS: could not export database.', error);
+    showToast('Could not export backup. Please try again.', { tone: 'error' });
+  }
+}
+
+function summarizeBackupPreview(jsonString) {
+  const parsed = JSON.parse(jsonString);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Backup file must contain a JSON object.');
+  }
+  const payload =
+    parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+      ? parsed.data
+      : parsed;
+
+  const hasAppSignature = parsed.appName === 'StudyOS' || payload.appName === 'StudyOS';
+  const hasKnownArrays =
+    Array.isArray(payload.subjects) ||
+    Array.isArray(payload.tasks) ||
+    Array.isArray(payload.sessions) ||
+    Array.isArray(payload.events);
+
+  if (!hasAppSignature && !hasKnownArrays) {
+    throw new Error('Selected file is not a valid StudyOS backup.');
+  }
+
+  const subjectsCount = Array.isArray(payload.subjects) ? payload.subjects.length : 0;
+  const tasksCount = Array.isArray(payload.tasks) ? payload.tasks.length : 0;
+  const sessionsCount = Array.isArray(payload.sessions) ? payload.sessions.length : 0;
+  const eventsCount = Array.isArray(payload.events) ? payload.events.length : 0;
+
+  return `${subjectsCount} subjects · ${tasksCount} tasks · ${sessionsCount} sessions · ${eventsCount} events`;
+}
+
+function openRestoreConfirmModal({ fileName, summaryText, jsonString }) {
+  pendingRestoreJsonString = jsonString;
+  if (refs.restoreFileName) {
+    refs.restoreFileName.textContent = fileName || 'studyos-backup.json';
+  }
+  if (refs.restoreFileCounts) {
+    refs.restoreFileCounts.textContent = summaryText || 'Valid StudyOS Backup';
+  }
+  if (refs.restoreFormError) {
+    refs.restoreFormError.hidden = true;
+    refs.restoreFormError.textContent = '';
+  }
+  if (refs.restoreConfirmBtn) {
+    refs.restoreConfirmBtn.disabled = false;
+    refs.restoreConfirmBtn.textContent = 'Overwrite & Restore Data';
+  }
+
+  if (refs.restoreConfirmModal) {
+    if (typeof refs.restoreConfirmModal.showModal === 'function') {
+      if (!refs.restoreConfirmModal.open) refs.restoreConfirmModal.showModal();
+    } else {
+      refs.restoreConfirmModal.setAttribute('open', '');
+    }
+  }
+}
+
+function closeRestoreConfirmModal() {
+  pendingRestoreJsonString = null;
+  if (refs.restoreBackupInput) {
+    refs.restoreBackupInput.value = '';
+  }
+  if (refs.restoreConfirmModal) {
+    if (typeof refs.restoreConfirmModal.close === 'function' && refs.restoreConfirmModal.open) {
+      refs.restoreConfirmModal.close();
+    } else {
+      refs.restoreConfirmModal.removeAttribute('open');
+    }
+  }
+}
+
+function handleRestoreFileSelected(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  toggleDataMenu(false);
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const jsonString = String(reader.result ?? '');
+    try {
+      const summaryText = summarizeBackupPreview(jsonString);
+      openRestoreConfirmModal({
+        fileName: file.name,
+        summaryText,
+        jsonString,
+      });
+    } catch (error) {
+      if (refs.restoreBackupInput) refs.restoreBackupInput.value = '';
+      showToast(error.message || 'Invalid StudyOS backup file.', {
+        tone: 'error',
+        duration: 5000,
+      });
+    }
+  };
+  reader.onerror = () => {
+    if (refs.restoreBackupInput) refs.restoreBackupInput.value = '';
+    showToast('Could not read the selected file.', { tone: 'error' });
+  };
+  reader.readAsText(file);
+}
+
+async function handleConfirmRestoreBackup() {
+  if (!pendingRestoreJsonString) return;
+
+  if (refs.restoreConfirmBtn) {
+    refs.restoreConfirmBtn.disabled = true;
+    refs.restoreConfirmBtn.textContent = 'Restoring...';
+  }
+
+  try {
+    await importDatabase(pendingRestoreJsonString);
+    closeRestoreConfirmModal();
+    showToast('Backup restored! Reloading StudyOS...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 650);
+  } catch (error) {
+    console.warn('StudyOS: could not import database.', error);
+    if (refs.restoreFormError) {
+      refs.restoreFormError.textContent =
+        error.message || 'Could not restore backup. Please check the file and try again.';
+      refs.restoreFormError.hidden = false;
+    }
+    if (refs.restoreConfirmBtn) {
+      refs.restoreConfirmBtn.disabled = false;
+      refs.restoreConfirmBtn.textContent = 'Overwrite & Restore Data';
+    }
+  }
 }
 
 /* ==========================================================================
@@ -4287,6 +4452,60 @@ function bindEvents() {
     });
   }
 
+  // Data Management (Backup & Restore)
+  if (refs.dataMenuBtn) {
+    refs.dataMenuBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleDataMenu();
+    });
+  }
+
+  if (refs.exportBackupBtn) {
+    refs.exportBackupBtn.addEventListener('click', () => {
+      handleExportBackup();
+    });
+  }
+
+  if (refs.restoreBackupBtn && refs.restoreBackupInput) {
+    refs.restoreBackupBtn.addEventListener('click', () => {
+      refs.restoreBackupInput.value = '';
+      refs.restoreBackupInput.click();
+    });
+  }
+
+  if (refs.restoreBackupInput) {
+    refs.restoreBackupInput.addEventListener('change', handleRestoreFileSelected);
+  }
+
+  if (refs.restoreConfirmBtn) {
+    refs.restoreConfirmBtn.addEventListener('click', handleConfirmRestoreBackup);
+  }
+
+  if (refs.restoreCancelBtn) {
+    refs.restoreCancelBtn.addEventListener('click', closeRestoreConfirmModal);
+  }
+
+  if (refs.restoreModalClose) {
+    refs.restoreModalClose.addEventListener('click', closeRestoreConfirmModal);
+  }
+
+  if (refs.restoreConfirmModal) {
+    refs.restoreConfirmModal.addEventListener('click', (event) => {
+      if (event.target === refs.restoreConfirmModal) closeRestoreConfirmModal();
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    if (
+      refs.dataManagementMenu &&
+      !refs.dataManagementMenu.hidden &&
+      !refs.dataManagementMenu.contains(event.target) &&
+      !refs.dataMenuBtn?.contains(event.target)
+    ) {
+      toggleDataMenu(false);
+    }
+  });
+
   refs.quickForm.addEventListener('submit', handleQuickAdd);
   refs.autoPlan.addEventListener('click', handleAutoPlan);
   refs.newTaskButton.addEventListener('click', () => openTaskModal());
@@ -4296,6 +4515,11 @@ function bindEvents() {
   refs.startFocusButton.addEventListener('click', () => requestFocusSession());
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && refs.dataManagementMenu && !refs.dataManagementMenu.hidden) {
+      toggleDataMenu(false);
+      return;
+    }
+
     if (event.key === 'Escape' && state.focus.zenMode && !document.querySelector('dialog[open]')) {
       event.preventDefault();
       setZenMode(false);
@@ -4437,6 +4661,18 @@ const api = {
     await ready;
     const blocks = await regenerateSchedule();
     return blocks.map(summarizeBlock);
+  },
+
+  /** Exports the full StudyOS IndexedDB database as a JSON-serializable backup object. */
+  async exportBackup() {
+    await ready;
+    return exportDatabase();
+  },
+
+  /** Restores a StudyOS backup JSON string or object into IndexedDB. */
+  async importBackup(jsonInput) {
+    await ready;
+    return importDatabase(jsonInput);
   },
 };
 
@@ -4621,6 +4857,18 @@ function cacheElements() {
     startFocusButton: byId('start-focus-btn'),
     statusPill: byId('status-pill'),
     statusDetail: byId('status-detail'),
+    dataMenuBtn: byId('data-menu-btn'),
+    dataManagementMenu: byId('data-management-menu'),
+    exportBackupBtn: byId('export-backup-btn'),
+    restoreBackupBtn: byId('restore-backup-btn'),
+    restoreBackupInput: byId('restore-backup-input'),
+    restoreConfirmModal: byId('restore-confirm-modal'),
+    restoreModalClose: byId('restore-modal-close'),
+    restoreFileName: byId('restore-file-name'),
+    restoreFileCounts: byId('restore-file-counts'),
+    restoreFormError: byId('restore-form-error'),
+    restoreCancelBtn: byId('restore-cancel-btn'),
+    restoreConfirmBtn: byId('restore-confirm-btn'),
   });
 }
 
