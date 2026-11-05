@@ -47,7 +47,7 @@ Currently in the planning and initial development stage.
 
 🎯 Vision.
 
-To build a beautiful, practical, and intelligent study companion that makes academic planning easier and more organized.
+To build a beautiful, practical, and intelligent study companion that makes academic planning easier and more organized..
 
 ⸻
 
